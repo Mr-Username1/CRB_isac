@@ -19,7 +19,7 @@ class SimConfig:
     # Time / trajectory
     Tf: float = 1.5
     Th: float = 1.0
-    mu: int = 5
+    mu: int = 3
     Vmax: float = 30.0
 
     # Communication (raw)
@@ -32,6 +32,16 @@ class SimConfig:
     beta0_db: float = -47.0
     a: float = 10.0  # measurement-noise scaling factor
     c: float = 3e8   # speed of light
+    gp_scale: float = 0.1  # Gp = gp_scale * B
+
+    # Scenario control
+    scenario_name: str = "paper_baseline"
+    nlos_bias_mean: float = 0.0
+    nlos_bias_std: float = 0.0
+    outlier_prob: float = 0.0
+    outlier_std: float = 0.0
+    model_mismatch_h: float = 0.0
+    model_mismatch_beta0_db: float = 0.0
 
     # Derived (filled by finalize_config)
     P_w: float | None = None
@@ -52,12 +62,53 @@ def dbm_to_watt(dbm: float) -> float:
 
 
 def finalize_config(cfg: SimConfig) -> SimConfig:
+    cfg = apply_scenario_preset(cfg)
     cfg.P_w = dbm_to_watt(cfg.P_dbm)
     cfg.N0_w_per_hz = dbm_to_watt(cfg.N0_dbm_per_hz)
     cfg.sigma0_sq = cfg.N0_w_per_hz * cfg.B
     cfg.alpha0 = db_to_linear(cfg.alpha0_db)
     cfg.beta0 = db_to_linear(cfg.beta0_db)
-    cfg.Gp = 0.1 * cfg.B
+    cfg.Gp = cfg.gp_scale * cfg.B
+    return cfg
+
+
+def apply_scenario_preset(cfg: SimConfig) -> SimConfig:
+    """
+    Fill scenario-dependent parameters.
+    - paper_baseline: close to the paper setup (low-noise ideal model)
+    - high_noise_realistic: higher noise + mild model mismatch + outliers
+    - extreme_noise: stress-test setting
+    """
+    name = cfg.scenario_name.lower()
+    if name == "paper_baseline":
+        cfg.a = 10.0
+        cfg.gp_scale = 0.1
+        cfg.nlos_bias_mean = 0.0
+        cfg.nlos_bias_std = 0.0
+        cfg.outlier_prob = 0.0
+        cfg.outlier_std = 0.0
+        cfg.model_mismatch_h = 0.0
+        cfg.model_mismatch_beta0_db = 0.0
+    elif name == "high_noise_realistic":
+        cfg.a = 100.0
+        cfg.gp_scale = 0.04
+        cfg.nlos_bias_mean = 12.0
+        cfg.nlos_bias_std = 4.0
+        cfg.outlier_prob = 0.08
+        cfg.outlier_std = 50.0
+        cfg.model_mismatch_h = 10.0
+        cfg.model_mismatch_beta0_db = 2.0
+    elif name == "extreme_noise":
+        cfg.a = 220.0
+        cfg.gp_scale = 0.02
+        cfg.nlos_bias_mean = 20.0
+        cfg.nlos_bias_std = 8.0
+        cfg.outlier_prob = 0.15
+        cfg.outlier_std = 90.0
+        cfg.model_mismatch_h = 20.0
+        cfg.model_mismatch_beta0_db = 4.0
+    else:
+        raise ValueError(f"Unknown scenario_name: {cfg.scenario_name}")
     return cfg
 
 

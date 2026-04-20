@@ -1,0 +1,13 @@
+{
+  "npz_file": "results\\isac_results.npz",
+  "num_methods": 3,
+  "methods": [
+    "communication_only",
+    "tradeoff",
+    "sensing_only"
+  ],
+  "scenario_name": "high_noise_realistic",
+  "noise_factor_a": 100.0,
+  "gp_scale": 0.04,
+  "save_full_trajectories": true
+}

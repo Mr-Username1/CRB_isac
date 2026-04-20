@@ -1,18 +1,42 @@
 import numpy as np
-import system_model as sysm
 
-# 1. 准备数据
-uav_path = np.array([[100, 100], [200, 200], [300, 300]]) # 轨迹坐标
-user_pos = np.array([500, 500]) # 用户坐标
+from config_factory import build_default_configs
+from simulation_pipeline import run_method_case
 
-cfg = sysm.finalize_config(sysm.SimConfig())
-S = np.array([
-  [100, 100], [180, 140], [260, 200], [340, 260], [420, 320],
-  [500, 380], [580, 440], [660, 500], [740, 560], [820, 620],
-], dtype=float)
-# 悬停点（由 mu 决定）
-Hov = sysm.extract_hover_points(S, cfg.mu)
-# 当前目标估计（不是目标真值）
-target_hat_xy = np.array([700.0, 900.0])
-crb = sysm.crb_xy_sum(Hov, target_hat_xy, cfg)
-print("CRB_xt+yt =", crb)
+
+def main() -> None:
+    """Lightweight single-case demo entry."""
+    cfg, e_cfg, scfg = build_default_configs(
+        scenario_name="paper_baseline",
+        mu=5,
+        max_sca_iter=20,
+        step_size=0.6,
+    )
+
+    user_xy = np.array([300.0, 400.0])
+    true_target_xy = np.array([1350.0, 1150.0])
+    case = run_method_case(
+        method_name="tradeoff",
+        eta=0.7,
+        user_xy=user_xy,
+        true_target_xy=true_target_xy,
+        nstg=25,
+        etot=35e3,
+        random_seed=1,
+        cfg=cfg,
+        e_cfg=e_cfg,
+        scfg=scfg,
+    )
+    print("method:", case["method_name"])
+    print("num_stages:", case["num_stages"])
+    print("final_energy_left:", case["energy_left"])
+    print("scan_energy_used:", case["scan_energy_used"])
+    print("target_hat_init_xy:", case["target_hat_init_xy"])
+    print("target_hat_final_xy:", case["target_hat_final_xy"])
+    if case["stage_logs"]:
+        print("last_stage:", case["stage_logs"][-1])
+
+
+if __name__ == "__main__":
+    main()
+
