@@ -28,7 +28,7 @@ def main():
 
     methods = [
         ("communication_only", 0.0),
-        ("tradeoff", 0.5),
+        ("tradeoff", 0.8),
         ("sensing_only", 1.0),
     ]
 
