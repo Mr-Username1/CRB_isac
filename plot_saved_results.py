@@ -202,7 +202,7 @@ def plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir: Path):
     if path_xy.size > 0:
         ax.plot(path_xy[:, 0], path_xy[:, 1], "-o", ms=2.5, label="UAV trajectory")
     if hover_xy.size > 0:
-        ax.scatter(hover_xy[:, 0], hover_xy[:, 1], s=25, marker="^", label="hover points")
+        ax.scatter(hover_xy[:, 0], hover_xy[:, 1], s=25, marker="^", color="red", label="hover points")
     if coarse_hover_xy.size > 0:
         ax.plot(
             coarse_hover_xy[:, 0],
@@ -230,6 +230,8 @@ def plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir: Path):
             alpha=0.8,
             label="target est updates",
         )
+    # Add UAV initial position
+    ax.scatter(100.0, 100.0, marker="s", s=60, c="tab:cyan", label="UAV start")
     ax.set_title("Optimized Trajectory (Tradeoff)")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
@@ -239,6 +241,39 @@ def plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir: Path):
 
     fig.tight_layout()
     fig.savefig(out_dir / "trajectory_tradeoff.png", dpi=200)
+
+
+def plot_all_trajectories(results, user_xy, true_target_xy, out_dir: Path):
+    fig, ax = plt.subplots(figsize=(8, 6))
+    colors = {'communication_only': 'blue', 'tradeoff': 'green', 'sensing_only': 'red'}
+    markers = {'communication_only': 'o', 'tradeoff': 's', 'sensing_only': '^'}
+
+    for result in results:
+        method = result['method_name']
+        if method not in colors:
+            continue
+        path_xy = _concat_paths(result.get("all_paths", []))
+        hover_xy = np.asarray(result.get("all_hover_xy", []), dtype=float)
+        coarse_hover_xy = np.asarray(result.get("coarse_hover_xy", []), dtype=float)
+        if path_xy.size > 0:
+            ax.plot(path_xy[:, 0], path_xy[:, 1], "-", marker=markers[method], ms=3, color=colors[method], label=f"{method} trajectory")
+        if hover_xy.size > 0:
+            ax.scatter(hover_xy[:, 0], hover_xy[:, 1], s=30, marker="^", color=colors[method], alpha=0.7, label=f"{method} hover")
+        if coarse_hover_xy.size > 0:
+            ax.plot(coarse_hover_xy[:, 0], coarse_hover_xy[:, 1], "--", lw=1.2, color=colors[method], alpha=0.5, label=f"{method} coarse")
+
+    # Common elements
+    ax.scatter(user_xy[0], user_xy[1], marker="*", s=120, c="tab:green", label="user")
+    ax.scatter(true_target_xy[0], true_target_xy[1], marker="x", s=90, c="tab:red", label="target true")
+    ax.scatter(100.0, 100.0, marker="s", s=60, c="tab:cyan", label="UAV start")
+    ax.set_title("Trajectories for All Methods")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(out_dir / "all_trajectories.png", dpi=200)
 
 
 def main():
@@ -254,7 +289,7 @@ def main():
     plot_stagewise_convergence(stage_histories, out_dir)
     plot_global_evolution_by_waypoints(tradeoff, out_dir)
     plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir)
-
+    plot_all_trajectories(results, user_xy, true_target_xy, out_dir)
     print(f"Saved figures to: {out_dir}")
     plt.show()
 

@@ -174,7 +174,7 @@ def solve_p2m_sca(stage: StageData, cfg: sm.SimConfig, e_cfg: pb.EnergyConfig, s
         if denom <= 0.0:
             raise ValueError("Invalid cumulative denominator in Eq.(33).")
         R_lin = (stage.R_prev_sum + stage.Nm * R_lin_stage) / denom
-        obj = cp.Minimize(stage.eta * F - (1 - stage.eta) * R_lin)
+        obj = cp.Minimize(stage.eta * F - (1 - stage.eta) * R_lin/1000)
 
         prob = cp.Problem(obj, cons)
         prob.solve(verbose=False)

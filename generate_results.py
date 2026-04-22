@@ -21,7 +21,7 @@ def main():
     meta_path = output_dir / "isac_results_meta.json"
 
     user_xy = np.array([300.0, 400.0], dtype = float)
-    true_target_xy = np.array([1350.0, 1150.0], dtype = float)
+    true_target_xy = np.array([1342.8, 1109.2], dtype = float)
     nstg = 25
     etot = 35e3
     seed = 1

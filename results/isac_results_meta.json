@@ -6,8 +6,8 @@
     "tradeoff",
     "sensing_only"
   ],
-  "scenario_name": "extreme_noise",
-  "noise_factor_a": 220.0,
-  "gp_scale": 0.02,
+  "scenario_name": "high_noise_realistic",
+  "noise_factor_a": 100.0,
+  "gp_scale": 0.04,
   "save_full_trajectories": true
 }

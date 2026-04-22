@@ -12,8 +12,8 @@ class SimConfig:
     # Geometry
     Lx: float = 1500.0
     Ly: float = 1500.0
-    xB: float = 100.0
-    yB: float = 100.0
+    xB: float = 0.0
+    yB: float = 0.0
     H: float = 200.0
 
     # Time / trajectory

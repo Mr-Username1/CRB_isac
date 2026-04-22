@@ -38,9 +38,9 @@ def mle_grid_search(
     measured_ds: np.ndarray,
     hover_xy: np.ndarray,
     cfg: sm.SimConfig,
-    coarse_step: float = 50.0,
-    fine_step: float = 10.0,
-    fine_radius: float = 100.0,
+    coarse_step: float = 200.0,
+    fine_step: float = 1.0,
+    fine_radius: float = 200.0,
 ) -> np.ndarray:
     """MLE target estimate via two-level grid search."""
     measured_ds = np.asarray(measured_ds, dtype=float).reshape(-1)
@@ -284,6 +284,7 @@ def run_multistage_with_mle(
             f"[stage {m}] Nm={nm_used}, Km={km_used}, E_used={e_used:.2f}, "
             f"E_left={energy_left:.2f}, status={out['status_final']}, solver={out['solver_final']}, "
             f"target_hat=({target_hat_xy[0]:.1f},{target_hat_xy[1]:.1f})"
+            f"crb_final={out['crb_final']:.2f}"
         )
         m += 1
 
