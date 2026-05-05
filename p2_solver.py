@@ -200,7 +200,7 @@ def solve_p2m_sca(stage: StageData, cfg: sm.SimConfig, e_cfg: pb.EnergyConfig, s
             H_all_try = np.vstack([stage.prev_hover_xy, H_cur_try]) if stage.prev_hover_xy.size else H_cur_try
             crb_try = sm.crb_xy_sum(H_all_try, stage.target_hat_xy, cfg)
             r_try = _rate_value(S_try, stage, cfg)
-            obj_try = stage.eta * crb_try - (1 - stage.eta) * r_try
+            obj_try = stage.eta * crb_try - (1 - stage.eta) * r_try/1000
             if np.isfinite(obj_try):
                 if obj_try < obj_cand:
                     S_cand = S_try
@@ -218,7 +218,7 @@ def solve_p2m_sca(stage: StageData, cfg: sm.SimConfig, e_cfg: pb.EnergyConfig, s
             H_all_try = np.vstack([stage.prev_hover_xy, H_cur_try]) if stage.prev_hover_xy.size else H_cur_try
             crb_cand = sm.crb_xy_sum(H_all_try, stage.target_hat_xy, cfg)
             r_cand = _rate_value(S_cand, stage, cfg)
-            obj_cand = stage.eta * crb_cand - (1 - stage.eta) * r_cand
+            obj_cand = stage.eta * crb_cand - (1 - stage.eta) * r_cand/1000
 
         S_ref = S_cand
         V_ref = sm.compute_velocities(S_ref, stage.start_xy, cfg.Tf)

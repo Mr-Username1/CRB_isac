@@ -44,5 +44,21 @@ def save_results_bundle(
         "noise_factor_a": cfg.a,
         "gp_scale": cfg.gp_scale,
         "save_full_trajectories": bool(save_full_trajectories),
+        # Geometry / trajectory (for plotting and downstream tools; matches simulation)
+        "xB": float(cfg.xB),
+        "yB": float(cfg.yB),
+        "Lx": float(cfg.Lx),
+        "Ly": float(cfg.Ly),
+        "H": float(cfg.H),
+        "mu": int(cfg.mu),
+        "Tf": float(cfg.Tf),
+        "Th": float(cfg.Th),
+        "Vmax": float(cfg.Vmax),
+        # Communication / sensing raw knobs (rebuild cfg without guessing)
+        "P_dbm": float(cfg.P_dbm),
+        "B": float(cfg.B),
+        "N0_dbm_per_hz": float(cfg.N0_dbm_per_hz),
+        "alpha0_db": float(cfg.alpha0_db),
+        "beta0_db": float(cfg.beta0_db),
     }
     meta_json_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")

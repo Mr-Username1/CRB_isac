@@ -261,12 +261,19 @@ def evaluate_stage_metrics(
     S: np.ndarray,
     user_xy: np.ndarray,
     target_hat_xy: np.ndarray,
-    cfg: SimConfig
+    cfg: SimConfig,
+    start_xy: np.ndarray | None = None,
 ) -> dict:
     """
     返回当前轨迹的通信+感知指标（Section II）
+
+    start_xy: 轨迹起点用于速度计算；默认与仿真一致，为 (xB, yB)。
     """
-    V = compute_velocities(S, np.array([cfg.xB, cfg.yB]), cfg.Tf)
+    if start_xy is None:
+        start_xy = np.array([cfg.xB, cfg.yB], dtype=float)
+    else:
+        start_xy = np.asarray(start_xy, dtype=float).reshape(2,)
+    V = compute_velocities(S, start_xy, cfg.Tf)
     Hov = extract_hover_points(S, cfg.mu)
 
     dc = dc_uav_to_user(S, user_xy, cfg.H)

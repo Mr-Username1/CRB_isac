@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -17,6 +18,23 @@ def load_results(results_file: Path):
 
     data = np.load(results_file, allow_pickle=True)
     return list(data["results"]), data["user_xy"], data["true_target_xy"]
+
+
+def load_meta_for_results(results_file: Path) -> dict | None:
+    """Load sidecar meta JSON written by io_utils.save_results_bundle (if present)."""
+    meta_path = results_file.parent / f"{results_file.stem}_meta.json"
+    if not meta_path.exists():
+        return None
+    return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+def uav_start_xy_from_meta(meta: dict | None) -> np.ndarray:
+    """UAV base position used in simulation (defaults match system_model.SimConfig)."""
+    if meta is None:
+        return np.array([0.0, 0.0], dtype=float)
+    xb = float(meta.get("xB", 0.0))
+    yb = float(meta.get("yB", 0.0))
+    return np.array([xb, yb], dtype=float)
 
 
 def get_tradeoff_result(results):
@@ -184,7 +202,7 @@ def plot_global_evolution_by_waypoints(tradeoff, out_dir: Path):
     fig.savefig(out_dir / "global_evolution_by_waypoints.png", dpi=200)
 
 
-def plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir: Path):
+def plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir: Path, uav_start_xy: np.ndarray):
     fig, ax = plt.subplots(figsize=(6.2, 5.2))
     if tradeoff is None:
         ax.text(0.5, 0.5, "No trajectory data", ha="center", va="center")
@@ -230,8 +248,15 @@ def plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir: Path):
             alpha=0.8,
             label="target est updates",
         )
-    # Add UAV initial position
-    ax.scatter(100.0, 100.0, marker="s", s=60, c="tab:cyan", label="UAV start")
+    uav_start_xy = np.asarray(uav_start_xy, dtype=float).reshape(2,)
+    ax.scatter(
+        uav_start_xy[0],
+        uav_start_xy[1],
+        marker="s",
+        s=60,
+        c="tab:cyan",
+        label="UAV start",
+    )
     ax.set_title("Optimized Trajectory (Tradeoff)")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
@@ -243,7 +268,7 @@ def plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir: Path):
     fig.savefig(out_dir / "trajectory_tradeoff.png", dpi=200)
 
 
-def plot_all_trajectories(results, user_xy, true_target_xy, out_dir: Path):
+def plot_all_trajectories(results, user_xy, true_target_xy, out_dir: Path, uav_start_xy: np.ndarray):
     fig, ax = plt.subplots(figsize=(8, 6))
     colors = {'communication_only': 'blue', 'tradeoff': 'green', 'sensing_only': 'red'}
     markers = {'communication_only': 'o', 'tradeoff': 's', 'sensing_only': '^'}
@@ -265,7 +290,15 @@ def plot_all_trajectories(results, user_xy, true_target_xy, out_dir: Path):
     # Common elements
     ax.scatter(user_xy[0], user_xy[1], marker="*", s=120, c="tab:green", label="user")
     ax.scatter(true_target_xy[0], true_target_xy[1], marker="x", s=90, c="tab:red", label="target true")
-    ax.scatter(100.0, 100.0, marker="s", s=60, c="tab:cyan", label="UAV start")
+    uav_start_xy = np.asarray(uav_start_xy, dtype=float).reshape(2,)
+    ax.scatter(
+        uav_start_xy[0],
+        uav_start_xy[1],
+        marker="s",
+        s=60,
+        c="tab:cyan",
+        label="UAV start",
+    )
     ax.set_title("Trajectories for All Methods")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
@@ -282,14 +315,16 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     results, user_xy, true_target_xy = load_results(results_file)
+    meta = load_meta_for_results(results_file)
+    uav_start = uav_start_xy_from_meta(meta)
     tradeoff = get_tradeoff_result(results)
     stage_histories = extract_all_stage_histories(tradeoff)
 
     plot_performance_comparison(results, out_dir)
     plot_stagewise_convergence(stage_histories, out_dir)
     plot_global_evolution_by_waypoints(tradeoff, out_dir)
-    plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir)
-    plot_all_trajectories(results, user_xy, true_target_xy, out_dir)
+    plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir, uav_start)
+    plot_all_trajectories(results, user_xy, true_target_xy, out_dir, uav_start)
     print(f"Saved figures to: {out_dir}")
     plt.show()
 

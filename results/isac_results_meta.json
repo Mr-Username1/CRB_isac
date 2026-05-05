@@ -9,5 +9,19 @@
   "scenario_name": "high_noise_realistic",
   "noise_factor_a": 100.0,
   "gp_scale": 0.04,
-  "save_full_trajectories": true
+  "save_full_trajectories": true,
+  "xB": 0.0,
+  "yB": 0.0,
+  "Lx": 1500.0,
+  "Ly": 1500.0,
+  "H": 200.0,
+  "mu": 5,
+  "Tf": 1.5,
+  "Th": 1.0,
+  "Vmax": 30.0,
+  "P_dbm": 20.0,
+  "B": 1000000.0,
+  "N0_dbm_per_hz": -170.0,
+  "alpha0_db": -50.0,
+  "beta0_db": -47.0
 }
