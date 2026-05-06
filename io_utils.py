@@ -36,10 +36,15 @@ def save_results_bundle(
         true_target_xy=np.asarray(true_target_xy, dtype=float),
     )
 
+    localizer_meta = None
+    if results_to_save:
+        localizer_meta = results_to_save[0].get("localizer")
+
     meta = {
         "npz_file": str(output_npz_path),
         "num_methods": len(results_to_save),
         "methods": [r["method_name"] for r in results_to_save],
+        "localizer": localizer_meta,
         "scenario_name": cfg.scenario_name,
         "noise_factor_a": cfg.a,
         "gp_scale": cfg.gp_scale,
@@ -54,6 +59,7 @@ def save_results_bundle(
         "Tf": float(cfg.Tf),
         "Th": float(cfg.Th),
         "Vmax": float(cfg.Vmax),
+        "Vstr": float(cfg.Vstr),
         # Communication / sensing raw knobs (rebuild cfg without guessing)
         "P_dbm": float(cfg.P_dbm),
         "B": float(cfg.B),

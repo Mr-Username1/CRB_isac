@@ -38,11 +38,18 @@ def _extract_hover_expr(S: cp.Variable, mu: int, Km: int) -> cp.Expression:
 
 
 def _init_path(stage: StageData, cfg: sm.SimConfig) -> np.ndarray:
-    mid = 0.5 * (stage.user_xy + stage.target_hat_xy)
-    d = mid - stage.start_xy
-    d = d / (np.linalg.norm(d) + 1e-12)
-    v0 = min(20.0, 0.8 * cfg.Vmax)
-    S0 = np.vstack([stage.start_xy + (i + 1) * cfg.Tf * v0 * d for i in range(stage.Nm)])
+    """
+    Paper Sec. IV-C, Eq.(60): connect communication user with \\hat x_t, take midpoint
+    [x_mdl, y_mdl]; initial waypoints lie on the ray from stage start toward that midpoint
+    at distances V_str, 2 V_str, ... along the unit direction.
+    """
+    mdl = 0.5 * (stage.user_xy + stage.target_hat_xy)
+    vec = mdl - stage.start_xy
+    u = vec / (np.linalg.norm(vec) + 1e-12)
+    vstr = float(cfg.Vstr)
+    S0 = np.vstack(
+        [stage.start_xy + vstr * float(i + 1) * u for i in range(stage.Nm)]
+    )
     S0[:, 0] = np.clip(S0[:, 0], 0.0, cfg.Lx)
     S0[:, 1] = np.clip(S0[:, 1], 0.0, cfg.Ly)
     return S0

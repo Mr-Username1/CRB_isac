@@ -10,20 +10,22 @@ import numpy as np
 @dataclass
 class SimConfig:
     # Geometry
-    Lx: float = 1500.0
-    Ly: float = 1500.0
+    Lx: float = 2000.0
+    Ly: float = 2000.0
     xB: float = 0.0
     yB: float = 0.0
-    H: float = 200.0
+    H: float = 150.0
 
     # Time / trajectory
     Tf: float = 1.5
     Th: float = 1.0
     mu: int = 3
     Vmax: float = 30.0
+    # Paper Table II / Eq.(60): straight-line initial guess, step i along start -> midpoint
+    Vstr: float = 20.0
 
     # Communication (raw)
-    B: float = 1e6
+    B: float = 3e6
     P_dbm: float = 20.0
     N0_dbm_per_hz: float = -170.0
     alpha0_db: float = -50.0

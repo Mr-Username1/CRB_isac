@@ -26,8 +26,10 @@ def main() -> None:
         cfg=cfg,
         e_cfg=e_cfg,
         scfg=scfg,
+        localizer="ekf",
     )
     print("method:", case["method_name"])
+    print("localizer:", case.get("localizer"))
     print("num_stages:", case["num_stages"])
     print("final_energy_left:", case["energy_left"])
     print("scan_energy_used:", case["scan_energy_used"])

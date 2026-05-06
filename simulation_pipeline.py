@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import system_model as sm
 import problem as pb
+from ekf_range_localization import StaticRangeEKF2D
 from p2_solver import StageData, SolverCfg, solve_p2m_sca
 
 
@@ -34,6 +37,58 @@ def simulate_range_measurements(
     return ds_true + noise + nlos_bias + outlier_noise
 
 
+def _crb_xy_sum_finite(hover_xy: np.ndarray, ref_xy: np.ndarray, cfg: sm.SimConfig) -> float:
+    """Eq.(28) CRB_xt+CRB_yt at reference point ``ref_xy``; nan if geometry is singular."""
+    v = sm.crb_xy_sum(
+        np.asarray(hover_xy, dtype=float),
+        np.asarray(ref_xy, dtype=float).reshape(2),
+        cfg,
+    )
+    return float(v) if np.isfinite(v) else float("nan")
+
+
+def _near_map_corner(xy: np.ndarray, cfg: sm.SimConfig, tol: float = 5.0) -> bool:
+    """True if xy lies near a rectangle corner (common spurious discrete-MLE artifact)."""
+    x, y = float(xy[0]), float(xy[1])
+    on_v = x <= tol or x >= cfg.Lx - tol
+    on_h = y <= tol or y >= cfg.Ly - tol
+    return on_v and on_h
+
+
+def _two_level_grid_min(
+    neg_log_like,
+    x_lo: float,
+    x_hi: float,
+    y_lo: float,
+    y_hi: float,
+    coarse_step: float,
+    fine_step: float,
+    fine_radius: float,
+) -> tuple[float, float, float]:
+    """Return (best_nll, best_x, best_y) over coarse+fine grid in [x_lo,x_hi]×[y_lo,y_hi]."""
+    best = (np.inf, 0.5 * (x_lo + x_hi), 0.5 * (y_lo + y_hi))
+    x_grid = np.arange(x_lo, x_hi + 1e-9, coarse_step)
+    y_grid = np.arange(y_lo, y_hi + 1e-9, coarse_step)
+    for x in x_grid:
+        for y in y_grid:
+            val = neg_log_like(x, y)
+            if val < best[0]:
+                best = (val, float(x), float(y))
+    x0, y0 = best[1], best[2]
+    xf_l = max(x_lo, x0 - fine_radius)
+    xf_r = min(x_hi, x0 + fine_radius)
+    yf_l = max(y_lo, y0 - fine_radius)
+    yf_r = min(y_hi, y0 + fine_radius)
+    x_fine = np.arange(xf_l, xf_r + 1e-9, fine_step)
+    y_fine = np.arange(yf_l, yf_r + 1e-9, fine_step)
+    for x in x_fine:
+        for y in y_fine:
+            val = neg_log_like(x, y)
+            if val < best[0]:
+                best = (val, float(x), float(y))
+    return best
+
+
 def mle_grid_search(
     measured_ds: np.ndarray,
     hover_xy: np.ndarray,
@@ -41,10 +96,27 @@ def mle_grid_search(
     coarse_step: float = 200.0,
     fine_step: float = 1.0,
     fine_radius: float = 200.0,
+    ref_xy: np.ndarray | None = None,
+    ref_trust_radius: float = 450.0,
+    ref_coarse_step: float = 35.0,
+    ref_fine_radius: float = 130.0,
+    corner_nll_slack: float | None = None,
+    jump_ref_factor: float = 2.5,
 ) -> np.ndarray:
-    """MLE target estimate via two-level grid search."""
+    """
+    MLE target estimate via two-level grid search on the full map.
+
+    When ``ref_xy`` is set (typically the previous-stage estimate), an additional
+    two-level search is run inside a trust box around ``ref_xy``. If the global
+    minimizer sits near a map corner and is not clearly better than the trust-region
+    minimizer in NLL, the trust-region result is returned — mitigating spurious
+    boundary minima under model mismatch / heavy-tailed noise.
+    """
     measured_ds = np.asarray(measured_ds, dtype=float).reshape(-1)
     hover_xy = np.asarray(hover_xy, dtype=float)
+    k_meas = int(measured_ds.shape[0])
+    if corner_nll_slack is None:
+        corner_nll_slack = max(250.0, 18.0 * float(k_meas))
 
     def neg_log_like(x: float, y: float) -> float:
         target = np.array([x, y], dtype=float)
@@ -56,28 +128,41 @@ def mle_grid_search(
         resid2 = (measured_ds - ds_model) ** 2
         return float(0.5 * np.sum(np.log(sigma2) + resid2 / sigma2))
 
-    x_grid = np.arange(0.0, cfg.Lx + 1e-9, coarse_step)
-    y_grid = np.arange(0.0, cfg.Ly + 1e-9, coarse_step)
-    best = (np.inf, 0.0, 0.0)
-    for x in x_grid:
-        for y in y_grid:
-            val = neg_log_like(x, y)
-            if val < best[0]:
-                best = (val, x, y)
+    nll_g, xg, yg = _two_level_grid_min(
+        neg_log_like, 0.0, cfg.Lx, 0.0, cfg.Ly, coarse_step, fine_step, fine_radius
+    )
+    xy_global = np.array([xg, yg], dtype=float)
 
-    x0, y0 = best[1], best[2]
-    xf_l = max(0.0, x0 - fine_radius)
-    xf_r = min(cfg.Lx, x0 + fine_radius)
-    yf_l = max(0.0, y0 - fine_radius)
-    yf_r = min(cfg.Ly, y0 + fine_radius)
-    x_fine = np.arange(xf_l, xf_r + 1e-9, fine_step)
-    y_fine = np.arange(yf_l, yf_r + 1e-9, fine_step)
-    for x in x_fine:
-        for y in y_fine:
-            val = neg_log_like(x, y)
-            if val < best[0]:
-                best = (val, x, y)
-    return np.array([best[1], best[2]], dtype=float)
+    if ref_xy is None:
+        return xy_global
+
+    ref_xy = np.asarray(ref_xy, dtype=float).reshape(2,)
+    rx, ry = float(ref_xy[0]), float(ref_xy[1])
+    x_lo = max(0.0, rx - ref_trust_radius)
+    x_hi = min(cfg.Lx, rx + ref_trust_radius)
+    y_lo = max(0.0, ry - ref_trust_radius)
+    y_hi = min(cfg.Ly, ry + ref_trust_radius)
+    nll_r, xr, yr = _two_level_grid_min(
+        neg_log_like,
+        x_lo,
+        x_hi,
+        y_lo,
+        y_hi,
+        ref_coarse_step,
+        fine_step,
+        ref_fine_radius,
+    )
+    xy_ref = np.array([xr, yr], dtype=float)
+
+    prefer_ref = False
+    if _near_map_corner(xy_global, cfg) and (nll_g >= nll_r - corner_nll_slack):
+        prefer_ref = True
+    dist_jump = float(np.linalg.norm(xy_global - ref_xy))
+    if (not prefer_ref) and dist_jump > jump_ref_factor * ref_trust_radius:
+        if nll_g >= nll_r - corner_nll_slack:
+            prefer_ref = True
+
+    return xy_ref.copy() if prefer_ref else xy_global.copy()
 
 
 def build_coarse_scan_hover_points(
@@ -170,8 +255,9 @@ def run_multistage_with_mle(
     random_seed: int = 1,
     coarse_scan_nx: int = 2,
     coarse_scan_ny: int = 2,
+    localizer: Literal["mle", "ekf"] = "ekf",
 ) -> dict:
-    """Run multi-stage trajectory design and stage-wise target MLE updates."""
+    """Run multi-stage trajectory design and stage-wise target localization (MLE or EKF)."""
     rng = np.random.default_rng(random_seed)
     start_xy0 = np.array([cfg.xB, cfg.yB], dtype=float)
     coarse = run_initial_coarse_scan(
@@ -202,6 +288,14 @@ def run_multistage_with_mle(
     target_hat_history = [target_hat_xy.copy()]
     n_prev_total = 0
     r_prev_sum = 0.0
+
+    loc = str(localizer).lower()
+    if loc not in ("mle", "ekf"):
+        raise ValueError(f"localizer must be 'mle' or 'ekf', got {localizer!r}")
+    ekf: StaticRangeEKF2D | None = None
+    if loc == "ekf":
+        ekf = StaticRangeEKF2D(cfg)
+        ekf.reset(target_hat_xy)
 
     while True:
         if energy_left <= 1e-6:
@@ -257,8 +351,19 @@ def run_multistage_with_mle(
         measured_ds_stage = simulate_range_measurements(hov, true_target_xy, cfg, rng)
         measured_ds_all = np.hstack([measured_ds_all, measured_ds_stage])
         target_hat_prev = target_hat_xy.copy()
-        target_hat_xy = mle_grid_search(measured_ds_all, prev_hover_xy, cfg)
+        if ekf is not None:
+            for j in range(int(hov.shape[0])):
+                ekf.update_one(hov[j, :], float(measured_ds_stage[j]))
+            target_hat_xy = ekf.x_hat.copy()
+        else:
+            target_hat_xy = mle_grid_search(
+                measured_ds_all, prev_hover_xy, cfg, ref_xy=target_hat_prev
+            )
         target_hat_history.append(target_hat_xy.copy())
+
+        pos_err_m = float(np.linalg.norm(target_hat_xy - true_target_xy))
+        crb_at_true = _crb_xy_sum_finite(prev_hover_xy, true_target_xy, cfg)
+        crb_at_hat = _crb_xy_sum_finite(prev_hover_xy, target_hat_xy, cfg)
 
         all_paths.append(s_opt)
         all_hovers.append(hov)
@@ -278,13 +383,18 @@ def run_multistage_with_mle(
                 "solver": out["solver_final"],
                 "target_hat_prev_xy": target_hat_prev,
                 "target_hat_xy": target_hat_xy.copy(),
+                "position_error_m": pos_err_m,
+                "crb_xy_sum_at_true": crb_at_true,
+                "crb_xy_sum_at_hat": crb_at_hat,
+                "localizer": loc,
             }
         )
         print(
-            f"[stage {m}] Nm={nm_used}, Km={km_used}, E_used={e_used:.2f}, "
+            f"[stage {m}] Nm={nm_used}, Km={km_used}, loc={loc} E_used={e_used:.2f}, "
             f"E_left={energy_left:.2f}, status={out['status_final']}, solver={out['solver_final']}, "
-            f"target_hat=({target_hat_xy[0]:.1f},{target_hat_xy[1]:.1f})"
-            f"crb_final={out['crb_final']:.2f}"
+            f"target_hat=({target_hat_xy[0]:.1f},{target_hat_xy[1]:.1f}) "
+            f"crb_plan={out['crb_final']:.2f} "
+            f"pos_err={pos_err_m:.2f}m crb@true={crb_at_true:.2f} crb@hat={crb_at_hat:.2f}"
         )
         m += 1
 
@@ -302,6 +412,7 @@ def run_multistage_with_mle(
         "measured_ds_all": measured_ds_all,
         "target_hat_final_xy": target_hat_xy,
         "energy_left": energy_left,
+        "localizer": loc,
     }
 
 
@@ -316,6 +427,7 @@ def run_method_case(
     cfg: sm.SimConfig,
     e_cfg: pb.EnergyConfig,
     scfg: SolverCfg,
+    localizer: Literal["mle", "ekf"] = "ekf",
 ) -> dict:
     """Run one method case and return serializable data."""
     res = run_multistage_with_mle(
@@ -328,16 +440,22 @@ def run_method_case(
         nstg=nstg,
         etot=etot,
         random_seed=random_seed,
+        localizer=localizer,
     )
+    th_f = np.asarray(res["target_hat_final_xy"], dtype=float)
+    tt = np.asarray(true_target_xy, dtype=float).reshape(2,)
+    final_position_error_m = float(np.linalg.norm(th_f - tt))
     return {
         "method_name": method_name,
         "eta": float(eta),
+        "localizer": str(res.get("localizer", localizer)),
         "num_stages": int(res["num_stages"]),
         "energy_left": float(res["energy_left"]),
-        "target_hat_final_xy": np.asarray(res["target_hat_final_xy"], dtype=float),
+        "target_hat_final_xy": th_f,
         "target_hat_init_xy": np.asarray(res["target_hat_init_xy"], dtype=float),
         "target_hat_history": np.asarray(res["target_hat_history"], dtype=float),
         "scan_energy_used": float(res["scan_energy_used"]),
+        "final_position_error_m": final_position_error_m,
         "stage_logs": res["stage_logs"],
         "all_paths": [np.asarray(p, dtype=float) for p in res["all_paths"]],
         "all_hovers": [np.asarray(h, dtype=float) for h in res["all_hovers"]],

@@ -144,3 +144,63 @@
 - 模块职责清晰：模型/求解/流程/配置/IO 分层明确；
 - 降低全局状态副作用，后续扩展 Monte Carlo 并行更安全；
 - 入口职责统一，维护成本下降。
+
+---
+
+日期：2026-05-06
+
+## 本轮目标
+
+- 用**序贯测距 EKF**替代（或与）网格 MLE 做目标水平位置估计；
+- 预测用上一时刻后验、观测雅可比与 \(h\) 在**当前先验** \(x_{k|k-1}\) 处计算；
+- 粗扫 MLE 初值 + 大对角 \(P_0\)；`generate_results.py` 中 `scenario_name` 与 `localizer` 可切换。
+
+## 新增 / 修改文件
+
+- **`ekf_range_localization.py`**（新）
+  - `StaticRangeEKF2D`：静态 \(F=I\)，小 \(Q\)，Joseph 形式协方差更新；
+  - `default_prior_variance_xy` / `default_process_variance`：与地图尺度 \(\min(L_x,L_y)\) 成比例。
+- **`simulation_pipeline.py`**
+  - `run_multistage_with_mle(..., localizer="ekf"|"mle")`：EKF 时对**本阶段每个新悬停点**按行序 `update_one`；MLE 分支保持原 `mle_grid_search`+`ref_xy`；
+  - `run_method_case(..., localizer=...)` 与返回字段 `localizer`；
+  - `stage_logs` 增加 `localizer`。
+- **`generate_results.py`**：顶部 `scenario_name`、`localizer` 两个开关；打印二者。
+- **`io_utils.py`**：`meta.json` 写入 `localizer`。
+- **`main.py`**：示例调用显式 `localizer="ekf"` 并打印。
+
+## EKF 关键公式（与代码一致）
+
+**状态** \(\mathbf{x}=[x_t,y_t]^\top\)。**量测** \(z_k\) 为斜距，UAV 水平位置 \(\mathbf{u}_k=[x_k^u,y_k^u]^\top\)。
+
+- **预测**（静态）：\(\mathbf{x}_{k|k-1}=\mathbf{x}_{k-1|k-1}\)，\(\mathbf{P}_{k|k-1}=\mathbf{P}_{k-1|k-1}+\mathbf{Q}\)，\(\mathbf{Q}=q\mathbf{I}\)，\(q\) 见参数表。
+- **预测距离**（在 \(\mathbf{x}_{k|k-1}\) 处）：\(d_s=\sqrt{H_{\mathrm{est}}^2+\|\mathbf{u}_k-\mathbf{x}_{k|k-1}\|^2}\)，\(h(\mathbf{x}_{k|k-1})=d_s\)。
+- **雅可比**（1×2）：\(\mathbf{H}_k=\big[-(x_k^u-x^-)/d_s,\;-(y_k^u-y^-)/d_s\big]\)。
+- **量测噪声方差**（与 `system_model.sigma2_measurement_from_g` 一致，在 \(d_s\) 处算 \(g\)）：\(R_k = a\sigma_0^2/(P_w G_p g(d_s))\)（下限截断 \(10^{-12}\)）。\(H_{\mathrm{est}}=H+\) `model_mismatch_h`，\(\beta_{0,\mathrm{est}}=\beta_0\cdot10^{\mathrm{model\_mismatch\_beta0\_db}/10}\)（与当前 MLE 假设对齐）。
+- **更新**：\(\mathbf{K}_k=\mathbf{P}_{k|k-1}\mathbf{H}_k^\top(S_k)^{-1}\)，\(S_k=\mathbf{H}_k\mathbf{P}_{k|k-1}\mathbf{H}_k^\top+R_k\)；\(\mathbf{x}_{k|k}=\mathbf{x}_{k|k-1}+\mathbf{K}_k(z_k-h)\)；Joseph：\(\mathbf{P}_{k|k}=(\mathbf{I}-\mathbf{K}_k\mathbf{H}_k)\mathbf{P}_{k|k-1}(\mathbf{I}-\mathbf{K}_k\mathbf{H}_k)^\top+\mathbf{K}_k R_k\mathbf{K}_k^\top\)（再对称化）。
+
+**初值**：均值 \(\mathbf{x}_{0|0}\) = 粗扫网格 MLE（`run_initial_coarse_scan` 内 `mle_grid_search`）；**不**将粗扫量测再次序贯送入 EKF，避免与初值同源双重计数。
+
+## 参数表（EKF 专用常数，与 `SimConfig` 几何联动）
+
+| 符号 | 代码位置 | 取值 / 规则 | 说明 |
+|------|-----------|-------------|------|
+| \(\sigma_0^2\)（每轴先验方差） | `default_prior_variance_xy` | \((0.32\cdot\min(L_x,L_y))^2\) | 大对角 \(P_0=\sigma_0^2 I\) |
+| \(q\)（每轴过程方差一步） | `default_process_variance` | \(\max\big((1.5\times10^{-4}\cdot\min(L_x,L_y))^2,\;10^{-4}\big)\) | 静态目标，仅防奇异 |
+| `prior_frac` | `StaticRangeEKF2D(..., prior_frac=0.32)` | 默认 0.32 | 可调大/小先验 |
+| \(H_{\mathrm{est}},\beta_{0,\mathrm{est}}\) | `_predicted_range_and_H_and_R` | 同 `simulation_pipeline.mle_grid_search` | 与现有 MLE 噪声模型一致 |
+| Joseph | `update_one` | 对称化 \(\tfrac12(\mathbf{P}+\mathbf{P}^\top)\) | 数值稳定 |
+
+## 使用说明
+
+- `generate_results.py` 顶部：`scenario_name = "..."`，`localizer = "ekf"` 或 `"mle"`。
+- 若需旧行为全文网格 MLE：设 `localizer="mle"`。
+
+## 备注
+
+- EKF 仅替换**目标位置估计**；轨迹优化仍用 \(\widetilde{\mathrm{CRB}}(\hat{\mathbf{p}})\) 与 SCA，与论文结构一致。
+- 粗扫初值仍用 MLE（小区域粗网格），与「初值来自粗扫」要求一致。
+
+### 问题修复（同日）
+
+- `ekf_range_localization.StaticRangeEKF2D.update_one`：`H @ P_minus @ H.T` 为 shape `(1,1)`，直接 `float(...)` 在部分 NumPy 下触发 `TypeError`；改为对 `S_mat` 做 `reshape(-1)[0]` 再与 `R` 相加得到标量 \(S_k\)。
+- 本地已跑通：`python generate_results.py`（`paper_baseline` + `ekf` 三方法）、`localizer='mle'` 单 case、以及 200 次随机 `update_one` 压力脚本。

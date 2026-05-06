@@ -7,7 +7,10 @@ from io_utils import save_results_bundle
 
 
 def main():
-    scenario_name = "high_noise_realistic"  # options: paper_baseline / high_noise_realistic / extreme_noise
+    # --- experiment switches (single place to edit) ---
+    scenario_name = "paper_baseline"  # paper_baseline / high_noise_realistic / extreme_noise
+    localizer = "ekf"  # "ekf" (sequential range EKF) or "mle" (grid + ref guard)
+
     cfg, e_cfg, scfg = build_default_configs(
         scenario_name=scenario_name,
         mu=5,
@@ -15,15 +18,16 @@ def main():
         step_size=0.6,
     )
     print(f"Active scenario: {cfg.scenario_name}")
+    print(f"Localizer: {localizer}")
 
     output_dir = Path("results")
     npz_path = output_dir / "isac_results.npz"
     meta_path = output_dir / "isac_results_meta.json"
 
     user_xy = np.array([300.0, 400.0], dtype = float)
-    true_target_xy = np.array([1342.8, 1109.2], dtype = float)
+    true_target_xy = np.array([1842.8, 1709.2], dtype = float)
     nstg = 25
-    etot = 35e3
+    etot = 40e3
     seed = 1
 
     methods = [
@@ -46,11 +50,13 @@ def main():
             cfg=cfg,
             e_cfg=e_cfg,
             scfg=scfg,
+            localizer=localizer,
         )
         results.append(case)
         print(
             f"{method_name}: stages={case['num_stages']}, "
             f"E_left={case['energy_left']:.2f}, "
+            f"pos_err_final={case['final_position_error_m']:.3f}m, "
             f"target_hat_final={case['target_hat_final_xy']}"
         )
 
