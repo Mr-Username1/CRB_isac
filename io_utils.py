@@ -11,7 +11,7 @@ def save_results_bundle(
     meta_json_path: str | Path,
     results: list[dict],
     user_xy: np.ndarray,
-    true_target_xy: np.ndarray,
+    true_target_xyz: np.ndarray,
     cfg: sm.SimConfig,
     save_full_trajectories: bool = True,
 ) -> None:
@@ -33,7 +33,7 @@ def save_results_bundle(
         output_npz_path,
         results=np.array(results_to_save, dtype=object),
         user_xy=np.asarray(user_xy, dtype=float),
-        true_target_xy=np.asarray(true_target_xy, dtype=float),
+        true_target_xyz=np.asarray(true_target_xyz, dtype=float),
     )
 
     localizer_meta = None
@@ -49,18 +49,22 @@ def save_results_bundle(
         "noise_factor_a": cfg.a,
         "gp_scale": cfg.gp_scale,
         "save_full_trajectories": bool(save_full_trajectories),
-        # Geometry / trajectory (for plotting and downstream tools; matches simulation)
+        # Geometry / trajectory
         "xB": float(cfg.xB),
         "yB": float(cfg.yB),
         "Lx": float(cfg.Lx),
         "Ly": float(cfg.Ly),
         "H": float(cfg.H),
+        "z_min": float(cfg.z_min),
+        "z_max": float(cfg.z_max),
+        "z_t_min": float(cfg.z_t_min),
+        "z_t_max": float(cfg.z_t_max),
         "mu": int(cfg.mu),
         "Tf": float(cfg.Tf),
         "Th": float(cfg.Th),
         "Vmax": float(cfg.Vmax),
         "Vstr": float(cfg.Vstr),
-        # Communication / sensing raw knobs (rebuild cfg without guessing)
+        # Communication / sensing raw knobs
         "P_dbm": float(cfg.P_dbm),
         "B": float(cfg.B),
         "N0_dbm_per_hz": float(cfg.N0_dbm_per_hz),

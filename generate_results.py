@@ -24,10 +24,10 @@ def main():
     npz_path = output_dir / "isac_results.npz"
     meta_path = output_dir / "isac_results_meta.json"
 
-    user_xy = np.array([300.0, 400.0], dtype = float)
-    true_target_xy = np.array([1842.8, 1709.2], dtype = float)
-    nstg = 25
-    etot = 40e3
+    user_xy = np.array([300.0, 400.0], dtype=float)
+    true_target_xyz = np.array([1842.8, 1709.2, 25.3], dtype=float)
+    nstg = 20
+    etot = 60e3
     seed = 1
 
     methods = [
@@ -43,7 +43,7 @@ def main():
             method_name=method_name,
             eta=eta,
             user_xy=user_xy,
-            true_target_xy=true_target_xy,
+            true_target_xyz=true_target_xyz,
             nstg=nstg,
             etot=etot,
             random_seed=seed,
@@ -57,7 +57,7 @@ def main():
             f"{method_name}: stages={case['num_stages']}, "
             f"E_left={case['energy_left']:.2f}, "
             f"pos_err_final={case['final_position_error_m']:.3f}m, "
-            f"target_hat_final={case['target_hat_final_xy']}"
+            f"target_hat_final={case['target_hat_final_xyz']}"
         )
 
     save_results_bundle(
@@ -65,7 +65,7 @@ def main():
         meta_json_path=meta_path,
         results=results,
         user_xy=user_xy,
-        true_target_xy=true_target_xy,
+        true_target_xyz=true_target_xyz,
         cfg=cfg,
         save_full_trajectories=True,
     )

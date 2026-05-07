@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 def _concat_paths(path_list):
     if not path_list:
-        return np.zeros((0, 2))
+        return np.zeros((0, 3))
     return np.vstack(path_list)
 
 
@@ -15,26 +15,23 @@ def load_results(results_file: Path):
         raise FileNotFoundError(
             f"Results file not found: {results_file}. Run generate_results.py first."
         )
-
     data = np.load(results_file, allow_pickle=True)
-    return list(data["results"]), data["user_xy"], data["true_target_xy"]
+    return list(data["results"]), data["user_xy"], data["true_target_xyz"]
 
 
 def load_meta_for_results(results_file: Path) -> dict | None:
-    """Load sidecar meta JSON written by io_utils.save_results_bundle (if present)."""
     meta_path = results_file.parent / f"{results_file.stem}_meta.json"
     if not meta_path.exists():
         return None
     return json.loads(meta_path.read_text(encoding="utf-8"))
 
 
-def uav_start_xy_from_meta(meta: dict | None) -> np.ndarray:
-    """UAV base position used in simulation (defaults match system_model.SimConfig)."""
+def uav_start_xyz_from_meta(meta: dict | None) -> np.ndarray:
     if meta is None:
-        return np.array([0.0, 0.0], dtype=float)
+        return np.array([0.0, 0.0, 0.0], dtype=float)
     xb = float(meta.get("xB", 0.0))
     yb = float(meta.get("yB", 0.0))
-    return np.array([xb, yb], dtype=float)
+    return np.array([xb, yb, 0.0], dtype=float)
 
 
 def get_tradeoff_result(results):
@@ -84,9 +81,9 @@ def plot_performance_comparison(results, out_dir: Path):
     )
     ax1.set_xticks(x)
     ax1.set_xticklabels(method_names, rotation=15)
-    ax1.set_ylabel("CRB")
+    ax1.set_ylabel("CRB (xyz trace)")
     ax2.set_ylabel("Rate (bps)")
-    ax1.set_title("Performance Comparison Across Methods")
+    ax1.set_title("Performance Comparison Across Methods (3-D)")
     ax1.grid(True, axis="y", alpha=0.3)
     h1, l1 = ax1.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
@@ -109,9 +106,9 @@ def extract_all_stage_histories(tradeoff):
         histories.append(
             np.column_stack(
                 [
-                    hist_arr[:, 0].astype(float),  # objective
-                    hist_arr[:, 1].astype(float),  # crb
-                    hist_arr[:, 2].astype(float),  # rate
+                    hist_arr[:, 0].astype(float),
+                    hist_arr[:, 1].astype(float),
+                    hist_arr[:, 2].astype(float),
                 ]
             )
         )
@@ -129,11 +126,8 @@ def plot_stagewise_convergence(stage_histories, out_dir: Path):
 
     n_stage = len(stage_histories)
     fig, axes = plt.subplots(
-        n_stage,
-        3,
-        figsize=(15.0, max(3.2 * n_stage, 4.5)),
-        squeeze=False,
-        sharex=False,
+        n_stage, 3, figsize=(15.0, max(3.2 * n_stage, 4.5)),
+        squeeze=False, sharex=False,
     )
     metric_specs = [
         ("Objective", 0, "tab:purple", "o"),
@@ -150,7 +144,7 @@ def plot_stagewise_convergence(stage_histories, out_dir: Path):
                 ax.plot(it, y, marker=marker, ms=2.8, lw=1.2, color=color)
                 if metric_name == "CRB":
                     positive = y[y > 0]
-                    if positive.size > 1 and positive.max() / positive.min() >= 100:
+                    if positive.size > 1 and positive.max() / (positive.min() + 1e-30) >= 100:
                         ax.set_yscale("log")
                 ax.set_xlabel("Iteration")
                 ax.set_ylabel(metric_name)
@@ -202,111 +196,128 @@ def plot_global_evolution_by_waypoints(tradeoff, out_dir: Path):
     fig.savefig(out_dir / "global_evolution_by_waypoints.png", dpi=200)
 
 
-def plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir: Path, uav_start_xy: np.ndarray):
+def plot_trajectory_2d(tradeoff, user_xy, true_target_xyz, out_dir: Path, uav_start_xyz: np.ndarray):
+    """Top-down (x-y) view of the 3-D trajectory."""
     fig, ax = plt.subplots(figsize=(6.2, 5.2))
     if tradeoff is None:
         ax.text(0.5, 0.5, "No trajectory data", ha="center", va="center")
-        ax.set_title("Optimized Trajectory")
+        ax.set_title("Optimized Trajectory (2-D top view)")
         fig.tight_layout()
-        fig.savefig(out_dir / "trajectory_tradeoff.png", dpi=200)
+        fig.savefig(out_dir / "trajectory_tradeoff_2d.png", dpi=200)
         return
 
     path_xy = _concat_paths(tradeoff["all_paths"])
-    hover_xy = np.asarray(tradeoff["all_hover_xy"], dtype=float)
-    coarse_hover_xy = np.asarray(tradeoff["coarse_hover_xy"], dtype=float)
+    hover_xyz = np.asarray(tradeoff["all_hover_xyz"], dtype=float)
+    coarse_hover_xyz = np.asarray(tradeoff["coarse_hover_xyz"], dtype=float)
     est_hist = np.asarray(tradeoff["target_hat_history"], dtype=float)
-    est_init = np.asarray(tradeoff["target_hat_init_xy"], dtype=float)
-    est_final = np.asarray(tradeoff["target_hat_final_xy"], dtype=float)
+    est_init = np.asarray(tradeoff["target_hat_init_xyz"], dtype=float)
+    est_final = np.asarray(tradeoff["target_hat_final_xyz"], dtype=float)
+
     if path_xy.size > 0:
         ax.plot(path_xy[:, 0], path_xy[:, 1], "-o", ms=2.5, label="UAV trajectory")
-    if hover_xy.size > 0:
-        ax.scatter(hover_xy[:, 0], hover_xy[:, 1], s=25, marker="^", color="red", label="hover points")
-    if coarse_hover_xy.size > 0:
-        ax.plot(
-            coarse_hover_xy[:, 0],
-            coarse_hover_xy[:, 1],
-            "--",
-            lw=1.2,
-            color="tab:gray",
-            label="coarse scan path",
-        )
+    if hover_xyz.size > 0:
+        ax.scatter(hover_xyz[:, 0], hover_xyz[:, 1], s=25, marker="^", color="red", label="hover points")
+    if coarse_hover_xyz.size > 0:
+        ax.plot(coarse_hover_xyz[:, 0], coarse_hover_xyz[:, 1], "--", lw=1.2, color="tab:gray", label="coarse scan path")
     ax.scatter(user_xy[0], user_xy[1], marker="*", s=120, c="tab:green", label="user")
-    ax.scatter(
-        true_target_xy[0], true_target_xy[1], marker="x", s=90, c="tab:red", label="target true"
-    )
+    ax.scatter(true_target_xyz[0], true_target_xyz[1], marker="x", s=90, c="tab:red", label="target true")
     ax.scatter(est_init[0], est_init[1], marker="o", s=60, c="tab:orange", label="target est init")
-    ax.scatter(
-        est_final[0], est_final[1], marker="D", s=55, c="tab:purple", label="target est final"
-    )
+    ax.scatter(est_final[0], est_final[1], marker="D", s=55, c="tab:purple", label="target est final")
     if est_hist.size > 0:
-        ax.plot(
-            est_hist[:, 0],
-            est_hist[:, 1],
-            "-.",
-            lw=1.5,
-            color="tab:purple",
-            alpha=0.8,
-            label="target est updates",
-        )
-    uav_start_xy = np.asarray(uav_start_xy, dtype=float).reshape(2,)
-    ax.scatter(
-        uav_start_xy[0],
-        uav_start_xy[1],
-        marker="s",
-        s=60,
-        c="tab:cyan",
-        label="UAV start",
-    )
-    ax.set_title("Optimized Trajectory (Tradeoff)")
+        ax.plot(est_hist[:, 0], est_hist[:, 1], "-.", lw=1.5, color="tab:purple", alpha=0.8, label="target est updates")
+    uav_start_xyz = np.asarray(uav_start_xyz, dtype=float).reshape(3,)
+    ax.scatter(uav_start_xyz[0], uav_start_xyz[1], marker="s", s=60, c="tab:cyan", label="UAV start")
+    ax.set_title("Optimized Trajectory (2-D Top View, Tradeoff)")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
-
     fig.tight_layout()
-    fig.savefig(out_dir / "trajectory_tradeoff.png", dpi=200)
+    fig.savefig(out_dir / "trajectory_tradeoff_2d.png", dpi=200)
 
 
-def plot_all_trajectories(results, user_xy, true_target_xy, out_dir: Path, uav_start_xy: np.ndarray):
+def plot_trajectory_3d(tradeoff, user_xy, true_target_xyz, out_dir: Path, uav_start_xyz: np.ndarray):
+    """Full 3-D trajectory view."""
+    fig = plt.figure(figsize=(9, 7))
+    ax = fig.add_subplot(projection="3d")
+    if tradeoff is None:
+        ax.text2D(0.5, 0.5, "No trajectory data", ha="center", va="center",
+                  transform=ax.transAxes)
+        ax.set_title("Optimized Trajectory (3-D)")
+        fig.tight_layout()
+        fig.savefig(out_dir / "trajectory_tradeoff_3d.png", dpi=200)
+        return
+
+    path_xyz = _concat_paths(tradeoff["all_paths"])
+    hover_xyz = np.asarray(tradeoff["all_hover_xyz"], dtype=float)
+    coarse_hover_xyz = np.asarray(tradeoff["coarse_hover_xyz"], dtype=float)
+    est_hist = np.asarray(tradeoff["target_hat_history"], dtype=float)
+    est_init = np.asarray(tradeoff["target_hat_init_xyz"], dtype=float)
+    est_final = np.asarray(tradeoff["target_hat_final_xyz"], dtype=float)
+    uav_start_xyz = np.asarray(uav_start_xyz, dtype=float).reshape(3,)
+
+    if path_xyz.size > 0:
+        ax.plot(path_xyz[:, 0], path_xyz[:, 1], path_xyz[:, 2], "-o", ms=2.5, label="UAV trajectory")
+    if hover_xyz.size > 0:
+        ax.scatter(hover_xyz[:, 0], hover_xyz[:, 1], hover_xyz[:, 2], s=25, marker="^", color="red", label="hover points")
+    if coarse_hover_xyz.size > 0:
+        ax.plot(coarse_hover_xyz[:, 0], coarse_hover_xyz[:, 1], coarse_hover_xyz[:, 2],
+                "--", lw=1.2, color="tab:gray", label="coarse scan path")
+    ax.scatter(user_xy[0], user_xy[1], 0, marker="*", s=120, c="tab:green", label="user")
+    ax.scatter(true_target_xyz[0], true_target_xyz[1], true_target_xyz[2],
+               marker="x", s=90, c="tab:red", label="target true")
+    ax.scatter(est_init[0], est_init[1], est_init[2], marker="o", s=60, c="tab:orange", label="target est init")
+    ax.scatter(est_final[0], est_final[1], est_final[2], marker="D", s=55, c="tab:purple", label="target est final")
+    if est_hist.size > 0:
+        ax.plot(est_hist[:, 0], est_hist[:, 1], est_hist[:, 2], "-.", lw=1.5, color="tab:purple", alpha=0.8, label="target est updates")
+    ax.scatter(uav_start_xyz[0], uav_start_xyz[1], uav_start_xyz[2],
+               marker="s", s=60, c="tab:cyan", label="UAV start")
+
+    ax.set_title("Optimized Trajectory (3-D, Tradeoff)")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_zlabel("z (m)")
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(out_dir / "trajectory_tradeoff_3d.png", dpi=200)
+
+
+def plot_all_trajectories_2d(results, user_xy, true_target_xyz, out_dir: Path, uav_start_xyz: np.ndarray):
+    """Top-down (x-y) view for all methods."""
     fig, ax = plt.subplots(figsize=(8, 6))
-    colors = {'communication_only': 'blue', 'tradeoff': 'green', 'sensing_only': 'red'}
-    markers = {'communication_only': 'o', 'tradeoff': 's', 'sensing_only': '^'}
+    colors = {"communication_only": "blue", "tradeoff": "green", "sensing_only": "red"}
+    markers = {"communication_only": "o", "tradeoff": "s", "sensing_only": "^"}
 
     for result in results:
-        method = result['method_name']
+        method = result["method_name"]
         if method not in colors:
             continue
         path_xy = _concat_paths(result.get("all_paths", []))
-        hover_xy = np.asarray(result.get("all_hover_xy", []), dtype=float)
-        coarse_hover_xy = np.asarray(result.get("coarse_hover_xy", []), dtype=float)
+        hover_xyz = np.asarray(result.get("all_hover_xyz", []), dtype=float)
+        coarse_hover_xyz = np.asarray(result.get("coarse_hover_xyz", []), dtype=float)
         if path_xy.size > 0:
-            ax.plot(path_xy[:, 0], path_xy[:, 1], "-", marker=markers[method], ms=3, color=colors[method], label=f"{method} trajectory")
-        if hover_xy.size > 0:
-            ax.scatter(hover_xy[:, 0], hover_xy[:, 1], s=30, marker="^", color=colors[method], alpha=0.7, label=f"{method} hover")
-        if coarse_hover_xy.size > 0:
-            ax.plot(coarse_hover_xy[:, 0], coarse_hover_xy[:, 1], "--", lw=1.2, color=colors[method], alpha=0.5, label=f"{method} coarse")
+            ax.plot(path_xy[:, 0], path_xy[:, 1], "-", marker=markers[method], ms=3,
+                    color=colors[method], label=f"{method} trajectory")
+        if hover_xyz.size > 0:
+            ax.scatter(hover_xyz[:, 0], hover_xyz[:, 1], s=30, marker="^",
+                       color=colors[method], alpha=0.7, label=f"{method} hover")
+        if coarse_hover_xyz.size > 0:
+            ax.plot(coarse_hover_xyz[:, 0], coarse_hover_xyz[:, 1], "--", lw=1.2,
+                    color=colors[method], alpha=0.5, label=f"{method} coarse")
 
-    # Common elements
     ax.scatter(user_xy[0], user_xy[1], marker="*", s=120, c="tab:green", label="user")
-    ax.scatter(true_target_xy[0], true_target_xy[1], marker="x", s=90, c="tab:red", label="target true")
-    uav_start_xy = np.asarray(uav_start_xy, dtype=float).reshape(2,)
-    ax.scatter(
-        uav_start_xy[0],
-        uav_start_xy[1],
-        marker="s",
-        s=60,
-        c="tab:cyan",
-        label="UAV start",
-    )
-    ax.set_title("Trajectories for All Methods")
+    ax.scatter(true_target_xyz[0], true_target_xyz[1], marker="x", s=90, c="tab:red", label="target true")
+    uav_start_xyz = np.asarray(uav_start_xyz, dtype=float).reshape(3,)
+    ax.scatter(uav_start_xyz[0], uav_start_xyz[1], marker="s", s=60, c="tab:cyan", label="UAV start")
+    ax.set_title("Trajectories for All Methods (2-D Top View)")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
     fig.tight_layout()
-    fig.savefig(out_dir / "all_trajectories.png", dpi=200)
+    fig.savefig(out_dir / "all_trajectories_2d.png", dpi=200)
 
 
 def main():
@@ -314,17 +325,18 @@ def main():
     out_dir = Path("results/figures")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    results, user_xy, true_target_xy = load_results(results_file)
+    results, user_xy, true_target_xyz = load_results(results_file)
     meta = load_meta_for_results(results_file)
-    uav_start = uav_start_xy_from_meta(meta)
+    uav_start = uav_start_xyz_from_meta(meta)
     tradeoff = get_tradeoff_result(results)
     stage_histories = extract_all_stage_histories(tradeoff)
 
     plot_performance_comparison(results, out_dir)
     plot_stagewise_convergence(stage_histories, out_dir)
     plot_global_evolution_by_waypoints(tradeoff, out_dir)
-    plot_trajectory(tradeoff, user_xy, true_target_xy, out_dir, uav_start)
-    plot_all_trajectories(results, user_xy, true_target_xy, out_dir, uav_start)
+    plot_trajectory_2d(tradeoff, user_xy, true_target_xyz, out_dir, uav_start)
+    plot_trajectory_3d(tradeoff, user_xy, true_target_xyz, out_dir, uav_start)
+    plot_all_trajectories_2d(results, user_xy, true_target_xyz, out_dir, uav_start)
     print(f"Saved figures to: {out_dir}")
     plt.show()
 

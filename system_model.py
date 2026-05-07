@@ -14,7 +14,11 @@ class SimConfig:
     Ly: float = 2000.0
     xB: float = 0.0
     yB: float = 0.0
-    H: float = 150.0
+    H: float = 150.0          # nominal UAV altitude (initial path, coarse scan)
+    z_min: float = 50.0       # min UAV altitude
+    z_max: float = 200.0      # max UAV altitude
+    z_t_min: float = 0.0      # min target height (ground)
+    z_t_max: float = 25.0    # max target height
 
     # Time / trajectory
     Tf: float = 1.5
@@ -25,7 +29,7 @@ class SimConfig:
     Vstr: float = 20.0
 
     # Communication (raw)
-    B: float = 3e6
+    B: float = 1e6
     P_dbm: float = 20.0
     N0_dbm_per_hz: float = -170.0
     alpha0_db: float = -50.0
@@ -118,17 +122,17 @@ def apply_scenario_preset(cfg: SimConfig) -> SimConfig:
 # II-A UAV trajectory model
 # =========================
 
-def compute_velocities(S: np.ndarray, start_xy: np.ndarray, Tf: float) -> np.ndarray:
+def compute_velocities(S: np.ndarray, start_xyz: np.ndarray, Tf: float) -> np.ndarray:
     """
     Eq. (1)
-    S: (N,2), start_xy: (2,)
-    return V: (N,2)
+    S: (N, D), start_xyz: (D,)
+    return V: (N, D)
     """
     S = np.asarray(S, dtype=float)
-    start_xy = np.asarray(start_xy, dtype=float).reshape(2,)
+    start_xyz = np.asarray(start_xyz, dtype=float).reshape(S.shape[1])
     N = S.shape[0]
     V = np.zeros_like(S, dtype=float)
-    V[0] = (S[0] - start_xy) / Tf
+    V[0] = (S[0] - start_xyz) / Tf
     if N > 1:
         V[1:] = (S[1:] - S[:-1]) / Tf
     return V
@@ -138,7 +142,7 @@ def extract_hover_points(S: np.ndarray, mu: int) -> np.ndarray:
     """
     Eq. (2): hover at indices mu, 2mu, ... (1-based)
     Python 0-based -> mu-1, 2mu-1, ...
-    return Hov: (K,2)
+    return Hov: (K, D)
     """
     S = np.asarray(S, dtype=float)
     idx = np.arange(mu - 1, S.shape[0], mu, dtype=int)
@@ -149,15 +153,17 @@ def extract_hover_points(S: np.ndarray, mu: int) -> np.ndarray:
 # II-B communication model
 # =========================
 
-def dc_uav_to_user(S: np.ndarray, user_xy: np.ndarray, H: float) -> np.ndarray:
+def dc_uav_to_user(S: np.ndarray, user_xy: np.ndarray) -> np.ndarray:
     """
-    Eq. (3)
+    Eq. (3): 3-D slant distance from each UAV waypoint to ground user.
+    S: (N, 3)  — (x, y, z)
+    user_xy: (2,) — ground user (x_u, y_u)
     return dc: (N,)
     """
     S = np.asarray(S, dtype=float)
     user_xy = np.asarray(user_xy, dtype=float).reshape(2,)
-    diff = S - user_xy
-    return np.sqrt(H**2 + np.sum(diff**2, axis=1))
+    diff_xy = S[:, :2] - user_xy
+    return np.sqrt(S[:, 2]**2 + np.sum(diff_xy**2, axis=1))
 
 
 def channel_gain_comm(dc: np.ndarray, alpha0: float) -> np.ndarray:
@@ -188,15 +194,17 @@ def average_rate(Rn: np.ndarray) -> float:
 # II-C sensing / CRB model
 # =========================
 
-def ds_uav_to_target(Hov: np.ndarray, target_xy: np.ndarray, H: float) -> np.ndarray:
+def ds_uav_to_target(Hov: np.ndarray, target_xyz: np.ndarray) -> np.ndarray:
     """
-    Eq. (8)
+    Eq. (8): 3-D slant distance from each hover point to 3-D target.
+    Hov: (K, 3)        — hover point (x, y, z)
+    target_xyz: (3,)    — target (x_t, y_t, z_t)
     return ds: (K,)
     """
     Hov = np.asarray(Hov, dtype=float)
-    target_xy = np.asarray(target_xy, dtype=float).reshape(2,)
-    diff = Hov - target_xy
-    return np.sqrt(H**2 + np.sum(diff**2, axis=1))
+    target_xyz = np.asarray(target_xyz, dtype=float).reshape(3,)
+    diff = Hov - target_xyz
+    return np.sqrt(np.sum(diff**2, axis=1))
 
 
 def channel_gain_sensing(ds: np.ndarray, beta0: float) -> np.ndarray:
@@ -223,36 +231,44 @@ def sigma2_measurement_from_g(g: np.ndarray, cfg: SimConfig) -> np.ndarray:
     return (cfg.a * cfg.sigma0_sq) / (cfg.P_w * cfg.Gp * g)
 
 
-def theta_abc(Hov: np.ndarray, target_hat_xy: np.ndarray, cfg: SimConfig) -> tuple[float, float, float]:
+def crb_xyz_sum(Hov: np.ndarray, target_xyz: np.ndarray, cfg: SimConfig) -> float:
     """
-    Eqs. (23)-(25), using estimated target (x_hat_t, y_hat_t)
+    CRB trace for 3-D target [x_t, y_t, z_t] from range-only measurements.
+
+    FIM (3x3):  F = Σ_k w_k * M_k
+      w_k = c1 / d_k^6 + 8 / d_k^4,   c1 = P_w * G_p * beta0 / (a * sigma0^2)
+      M_k = [[dx^2,  dx*dy, dx*dz],
+             [dx*dy, dy^2,  dy*dz],
+             [dx*dz, dy*dz, dz^2 ]]
+    CRB = trace(F^{-1}), regularised with 1e-6*I.
     """
     Hov = np.asarray(Hov, dtype=float)
-    target_hat_xy = np.asarray(target_hat_xy, dtype=float).reshape(2,)
+    target_xyz = np.asarray(target_xyz, dtype=float).reshape(3,)
 
-    dx = Hov[:, 0] - target_hat_xy[0]
-    dy = Hov[:, 1] - target_hat_xy[1]
-    ds = np.sqrt(cfg.H**2 + dx**2 + dy**2)
+    dx = Hov[:, 0] - target_xyz[0]
+    dy = Hov[:, 1] - target_xyz[1]
+    dz = Hov[:, 2] - target_xyz[2]
+    ds2 = dx*dx + dy*dy + dz*dz
+    ds = np.sqrt(ds2)
+    ds = np.maximum(ds, 1e-6)
 
     c1 = (cfg.P_w * cfg.Gp * cfg.beta0) / (cfg.a * cfg.sigma0_sq)
+    w = c1 / ds**6 + 8.0 / ds**4
 
-    theta_a = np.sum(c1 * (dx**2) / (ds**6) + 8.0 * (dx**2) / (ds**4))
-    theta_b = np.sum(c1 * (dy**2) / (ds**6) + 8.0 * (dy**2) / (ds**4))
-    theta_c = np.sum(c1 * (dx * dy) / (ds**6) + 8.0 * (dx * dy) / (ds**4))
+    F = np.zeros((3, 3), dtype=float)
+    F[0, 0] = np.sum(w * dx * dx)
+    F[1, 1] = np.sum(w * dy * dy)
+    F[2, 2] = np.sum(w * dz * dz)
+    F[0, 1] = F[1, 0] = np.sum(w * dx * dy)
+    F[0, 2] = F[2, 0] = np.sum(w * dx * dz)
+    F[1, 2] = F[2, 1] = np.sum(w * dy * dz)
 
-    return float(theta_a), float(theta_b), float(theta_c)
+    F += np.eye(3, dtype=float) * 1e-6
 
-
-def crb_xy_sum(Hov: np.ndarray, target_hat_xy: np.ndarray, cfg: SimConfig) -> float:
-    """
-    Eq. (28): CRB_xt + CRB_yt
-    """
-    theta_a, theta_b, theta_c = theta_abc(Hov, target_hat_xy, cfg)
-    denom = theta_a * theta_b - theta_c**2
-    eps = 1e-12
-    if denom <= eps:
-        return np.inf
-    return float((theta_a + theta_b) / denom)
+    try:
+        return float(np.trace(np.linalg.inv(F)))
+    except np.linalg.LinAlgError:
+        return float("inf")
 
 
 # =========================
@@ -262,33 +278,33 @@ def crb_xy_sum(Hov: np.ndarray, target_hat_xy: np.ndarray, cfg: SimConfig) -> fl
 def evaluate_stage_metrics(
     S: np.ndarray,
     user_xy: np.ndarray,
-    target_hat_xy: np.ndarray,
+    target_hat_xyz: np.ndarray,
     cfg: SimConfig,
-    start_xy: np.ndarray | None = None,
+    start_xyz: np.ndarray | None = None,
 ) -> dict:
     """
     返回当前轨迹的通信+感知指标（Section II）
 
-    start_xy: 轨迹起点用于速度计算；默认与仿真一致，为 (xB, yB)。
+    start_xyz: 轨迹起点用于速度计算；默认与仿真一致，为 (xB, yB, 0)。
     """
-    if start_xy is None:
-        start_xy = np.array([cfg.xB, cfg.yB], dtype=float)
+    if start_xyz is None:
+        start_xyz = np.array([cfg.xB, cfg.yB, 0.0], dtype=float)
     else:
-        start_xy = np.asarray(start_xy, dtype=float).reshape(2,)
-    V = compute_velocities(S, start_xy, cfg.Tf)
+        start_xyz = np.asarray(start_xyz, dtype=float).reshape(-1)
+    V = compute_velocities(S, start_xyz, cfg.Tf)
     Hov = extract_hover_points(S, cfg.mu)
 
-    dc = dc_uav_to_user(S, user_xy, cfg.H)
+    dc = dc_uav_to_user(S, user_xy)
     h = channel_gain_comm(dc, cfg.alpha0)
     Rn = rate_per_waypoint(h, cfg.P_w, cfg.sigma0_sq, cfg.B)
     R_bar = average_rate(Rn)
 
-    crb = crb_xy_sum(Hov, target_hat_xy, cfg)
+    crb = crb_xyz_sum(Hov, target_hat_xyz, cfg)
 
     return {
         "N": int(S.shape[0]),
         "K": int(Hov.shape[0]),
         "V": V,
         "R_bar": R_bar,
-        "CRB_xy_sum": crb,
+        "CRB_xyz_sum": crb,
     }
