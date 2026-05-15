@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Literal
 
 import numpy as np
@@ -64,7 +65,7 @@ def _two_level_grid_min_3d(
     fine_step: float,
     fine_radius: float,
     z_coarse_step: float = 50.0,
-    z_fine_step: float = 10.0,
+    z_fine_step: float = 1.0,
     z_fine_radius: float = 100.0,
 ) -> tuple[float, float, float, float]:
     """Return (best_nll, best_x, best_y, best_z) over coarse+fine 3-D grid."""
@@ -145,7 +146,7 @@ def mle_grid_search(
     jump_ref_factor: float = 2.5,
     fixed_z: float | None = None,
     z_coarse_step: float = 50.0,
-    z_fine_step: float = 10.0,
+    z_fine_step: float = 5.0,
 ) -> np.ndarray:
     """
     MLE target estimate via two-level grid search.
@@ -323,7 +324,7 @@ def run_initial_coarse_scan(
         hover_xyz=coarse_hover_xyz,
         cfg=cfg,
         coarse_step=80.0,
-        fine_step=20.0,
+        fine_step=2.0,
         fine_radius=150.0,
         fixed_z=0.5 * float(cfg.z_t_min + cfg.z_t_max),
     )
@@ -393,6 +394,7 @@ def run_multistage_with_mle(
         nm_used = None
         km_used = None
         min_nm = 3 * cfg.mu
+        t_sca_start = time.perf_counter()
         for nm_try in range(int(nstg), min_nm - 1, -cfg.mu):
             km_try = nm_try // cfg.mu
             stage = StageData(
@@ -402,7 +404,7 @@ def run_multistage_with_mle(
                 N_prev_total=n_prev_total, R_prev_sum=r_prev_sum,
             )
             try:
-                out_try = solve_p2m_sca(stage, cfg, e_cfg, scfg)
+                out_try = solve_p2m_sca(stage, cfg, e_cfg, scfg,kappa=10000.0)
             except RuntimeError:
                 continue
 
@@ -419,6 +421,7 @@ def run_multistage_with_mle(
         if out is None:
             break
 
+        t_sca_end = time.perf_counter()
         s_opt = out["S_opt"]
         hov = out["Hov_cur"]
         e_used, _ = pb.stage_energy_used(s_opt, start_xyz, cfg, e_cfg)
@@ -432,6 +435,7 @@ def run_multistage_with_mle(
         measured_ds_stage = simulate_range_measurements(hov, true_target_xyz, cfg, rng)
         measured_ds_all = np.hstack([measured_ds_all, measured_ds_stage])
         target_hat_prev = target_hat_xyz.copy()
+        t_loc_start = time.perf_counter()
         if ekf is not None:
             for j in range(int(hov.shape[0])):
                 ekf.update_one(hov[j, :], float(measured_ds_stage[j]))
@@ -442,6 +446,7 @@ def run_multistage_with_mle(
                 ref_xyz=target_hat_prev,
                 fixed_z=None,  # full 3-D after coarse scan
             )
+        t_loc_end = time.perf_counter()
         target_hat_history.append(target_hat_xyz.copy())
 
         pos_err_m = float(np.linalg.norm(target_hat_xyz - true_target_xyz))
@@ -467,6 +472,8 @@ def run_multistage_with_mle(
                 "crb_xyz_sum_at_true": crb_at_true,
                 "crb_xyz_sum_at_hat": crb_at_hat,
                 "localizer": loc,
+                "t_sca_s": t_sca_end - t_sca_start,
+                "t_loc_s": t_loc_end - t_loc_start,
             }
         )
         print(

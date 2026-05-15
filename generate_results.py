@@ -8,8 +8,8 @@ from io_utils import save_results_bundle
 
 def main():
     # --- experiment switches (single place to edit) ---
-    scenario_name = "paper_baseline"  # paper_baseline / high_noise_realistic / extreme_noise
-    localizer = "ekf"  # "ekf" (sequential range EKF) or "mle" (grid + ref guard)
+    scenario_name = "paper"  # paper_baseline / high_noise_realistic / extreme_noise
+    localizer = "ekf"  # "ekf" or "mle"
 
     cfg, e_cfg, scfg = build_default_configs(
         scenario_name=scenario_name,
@@ -25,7 +25,7 @@ def main():
     meta_path = output_dir / "isac_results_meta.json"
 
     user_xy = np.array([300.0, 400.0], dtype=float)
-    true_target_xyz = np.array([1842.8, 1709.2, 25.3], dtype=float)
+    true_target_xyz = np.array([1842.8, 1709.2, 18.3], dtype=float)
     nstg = 20
     etot = 60e3
     seed = 1

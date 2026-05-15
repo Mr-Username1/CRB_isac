@@ -127,7 +127,7 @@ def _crb_linearized(S: cp.Variable, S_ref: np.ndarray, stage: StageData, cfg: sm
     return F
 
 
-_SOLVER_CANDIDATES = ("CLARABEL", "SCS", "OSQP")
+_SOLVER_CANDIDATES = ("MOSEK","CLARABEL", "SCS", "OSQP")
 
 
 def _solve_with_fallback(prob: cp.Problem, stats: dict) -> str:
@@ -151,10 +151,18 @@ def _solve_with_fallback(prob: cp.Problem, stats: dict) -> str:
     )
 
 
-def solve_p2m_sca(stage: StageData, cfg: sm.SimConfig, e_cfg: pb.EnergyConfig, scfg: SolverCfg = SolverCfg()):
+def solve_p2m_sca(
+    stage: StageData,
+    cfg: sm.SimConfig,
+    e_cfg: pb.EnergyConfig,
+    scfg: SolverCfg = SolverCfg(),
+    kappa: float = 1000.0,
+):
+    if kappa == 0.0:
+        raise ValueError("kappa must be non-zero.")
     if stage.Km != stage.Nm // cfg.mu:
         raise ValueError("StageData.Km must equal floor(Nm/mu).")
-
+    
     S_ref = _init_path(stage, cfg)
     V_ref = sm.compute_velocities(S_ref, stage.start_xyz, cfg.Tf)
     delta_ref = np.maximum(np.linalg.norm(V_ref, axis=1) / e_cfg.v0, scfg.delta_eps)
@@ -217,7 +225,7 @@ def solve_p2m_sca(stage: StageData, cfg: sm.SimConfig, e_cfg: pb.EnergyConfig, s
         if denom <= 0.0:
             raise ValueError("Invalid cumulative denominator in Eq.(33).")
         R_lin = (stage.R_prev_sum + stage.Nm * R_lin_stage) / denom
-        obj = cp.Minimize(stage.eta * F - (1 - stage.eta) * R_lin / 1000)
+        obj = cp.Minimize(stage.eta * F - (1 - stage.eta) * R_lin / kappa)
 
         prob = cp.Problem(obj, cons)
         solver_name = _solve_with_fallback(prob, solver_stats)
@@ -245,7 +253,7 @@ def solve_p2m_sca(stage: StageData, cfg: sm.SimConfig, e_cfg: pb.EnergyConfig, s
             H_all_try = np.vstack([stage.prev_hover_xyz, H_cur_try]) if stage.prev_hover_xyz.size else H_cur_try
             crb_try = sm.crb_xyz_sum(H_all_try, stage.target_hat_xyz, cfg)
             r_try = _rate_value(S_try, stage, cfg)
-            obj_try = stage.eta * crb_try - (1 - stage.eta) * r_try / 1000
+            obj_try = stage.eta * crb_try - (1 - stage.eta) * r_try / kappa
             if np.isfinite(obj_try):
                 if obj_try < obj_cand:
                     S_cand = S_try
@@ -262,7 +270,7 @@ def solve_p2m_sca(stage: StageData, cfg: sm.SimConfig, e_cfg: pb.EnergyConfig, s
             H_all_try = np.vstack([stage.prev_hover_xyz, H_cur_try]) if stage.prev_hover_xyz.size else H_cur_try
             crb_cand = sm.crb_xyz_sum(H_all_try, stage.target_hat_xyz, cfg)
             r_cand = _rate_value(S_cand, stage, cfg)
-            obj_cand = stage.eta * crb_cand - (1 - stage.eta) * r_cand / 1000
+            obj_cand = stage.eta * crb_cand - (1 - stage.eta) * r_cand / kappa
 
         S_ref = S_cand
         V_ref = sm.compute_velocities(S_ref, stage.start_xyz, cfg.Tf)

@@ -1,0 +1,533 @@
+\chapter{目标定位方法}
+
+本章在第2章系统模型的基础上，详细阐述从距离量测中估计目标三维位置的两类方法：最大似然估计（MLE）和扩展卡尔曼滤波（EKF）。MLE 以批量方式处理全部累积量测，渐近达到 CRB 下界；EKF 以递推方式序贯更新状态估计，计算量恒定，适合在线定位场景。本章还介绍多阶段闭环中的初始粗扫描定位策略，并对两种方法进行理论对比。
+
+% ======================================================================
+\section{最大似然估计（MLE）}
+\label{sec:mle}
+% ======================================================================
+
+\subsection{负对数似然函数}
+
+给定 $K$ 个悬停点 $\mathcal{H}=\{\mathbf{h}[k]\}_{k=1}^{K}$ 处采集的距离量测 $\mathbf{r}=[r_1,\ldots,r_K]^{\mathsf{T}}$，其中 $r[k]\sim\mathcal{N}\bigl(d_s[k],\sigma^2[k]\bigr)$。量测噪声方差 $\sigma^2[k]$ 通过式\eqref{eq:variance_distance}依赖于未知目标距离 $d_s[k]$，因此方差本身也是目标位置 $\mathbf{t}=(x_t,y_t,z_t)^{\mathsf{T}}$ 的函数。完整的负对数似然函数为：
+
+\begin{equation}
+\mathcal{L}(\mathbf{t})=-\ln p(\mathbf{r}\mid\mathbf{t})
+=\frac{1}{2}\sum_{k=1}^{K}\left[\ln\sigma^2[k](\mathbf{t})+
+\frac{\bigl(r[k]-d_s[k](\mathbf{t})\bigr)^2}{\sigma^2[k](\mathbf{t})}\right]
+\label{eq:nll_full}
+\end{equation}
+
+其中 $d_s[k](\mathbf{t})=\|\mathbf{h}[k]-\mathbf{t}\|$ 为第 $k$ 个悬停点到 $\mathbf{t}$ 的三维斜距（式\eqref{eq:ds_distance}），$\sigma^2[k](\mathbf{t})$ 由式\eqref{eq:variance_distance}给出。式\eqref{eq:nll_full}中常数项已省略。
+
+\textbf{异方差的重要性}：式\eqref{eq:nll_full}中的第一项 $\ln\sigma^2[k]$ 不可简化为常数——忽略该项等同于假设所有量测等精度，将导致估计器在远距离（大噪声）量测上赋予过高权重，造成估计效率损失。目标位置的最大似然估计通过最小化 $\mathcal{L}(\mathbf{t})$ 获得：
+
+\begin{equation}
+\hat{\mathbf{t}}_{\mathrm{MLE}}=\arg\min_{\mathbf{t}\in\Omega}\mathcal{L}(\mathbf{t})
+\label{eq:mle_optimization}
+\end{equation}
+
+其中 $\Omega=[0,L_x]\times[0,L_y]\times[z_{t,\min},z_{t,\max}]$ 为目标可能区域。
+
+\subsection{两级网格搜索算法}
+
+$\mathcal{L}(\mathbf{t})$ 是 $\mathbf{t}$ 的高度非凸函数（距离 $d_s[k]$ 的非线性 + 方差的 $d_s^4$ 依赖），不存在闭式解。本文采用两级网格搜索求其全局最小值。
+
+\subsubsection{第一级：粗网格全局搜索}
+
+在搜索域 $\Omega$ 上以大步长 $\Delta_{\mathrm{coarse}}$（典型值 $80\sim200\;\mathrm{m}$）构建均匀网格，遍历所有格点计算 $\mathcal{L}(\mathbf{t})$，记录最小值所在格点 $\mathbf{t}_{\mathrm{coarse}}^*$。该步骤的计算代价为 $\mathcal{O}(L_xL_yL_z/\Delta_{\mathrm{coarse}}^3)$，步长选择需在当前计算资源下兼顾全局覆盖能力。
+
+\subsubsection{第二级：精网格局部搜索}
+
+以 $\mathbf{t}_{\mathrm{coarse}}^*$ 为中心、半径 $R_{\mathrm{fine}}$（典型值 $130\sim200\;\mathrm{m}$）的邻域内，以细步长 $\Delta_{\mathrm{fine}}$（典型值 $1\sim20\;\mathrm{m}$）构建局部精网格，再次遍历求 $\mathcal{L}$ 的局部最小值，得到最终估计 $\hat{\mathbf{t}}_{\mathrm{MLE}}$。
+
+两级策略的合理性在于：(i) 粗网格以低分辨率覆盖全域，避免遗漏全局最优区域；(ii) 精网格仅在粗最优附近作高分辨率搜索，将计算量控制在可接受范围内。
+
+\subsubsection{二维与三维搜索模式}
+
+当悬停点数量有限或几何不利时，部分维度的估计可能欠定。本文区分两种搜索模式：
+
+\begin{itemize}
+    \item \textbf{2-D 模式（固定 $z$）}：适用于粗扫描阶段（Stage 0，$K=4$ 个等高度悬停点）。由于所有悬停点位于同一高度 $H$，FIM 沿 $z$ 方向近似秩亏，高度不可观。此时将 $z$ 固定为 $\frac{1}{2}(z_{t,\min}+z_{t,\max})$，仅在 $x$-$y$ 平面执行网格搜索，粗步长 $80\;\mathrm{m}$、精步长 $20\;\mathrm{m}$。
+    \item \textbf{3-D 模式（搜索 $x,y,z$）}：适用于累积多阶段量测后。随着悬停点高度分布展开（SCA 优化自动调整 UAV 飞行高度），三维 FIM 逐步满秩，此时在三维搜索域上进行完整的 $x$-$y$-$z$ 网格搜索。$z$ 搜索范围取 $[z_{t,\min},z_{t,\max}]$，粗步长 $50\;\mathrm{m}$、精步长 $10\;\mathrm{m}$。
+\end{itemize}
+
+两种模式对应仿真代码 \texttt{simulation\_pipeline.py} 中 \texttt{mle\_grid\_search} 函数的 \texttt{fixed\_z} 参数，2-D 模式对应 \texttt{fixed\_z} 为标称值、3-D 模式对应 \texttt{fixed\_z=None}。
+
+\subsection{参考点守卫机制}
+
+两级网格搜索在实际应用中面临一个常见问题：当悬停点几何构型不利（例如悬停点集中在某一侧）或量测噪声较大时，$\mathcal{L}(\mathbf{t})$ 可能在搜索域边界（尤其是角落）处取得虚假极小值。这些虚假解通常距离真实目标位置很远，若不加甄别地采纳，将严重破坏后续多阶段优化的收敛性。
+
+为此，本文引入\textbf{参考点守卫机制}（对应 \texttt{mle\_grid\_search} 的 \texttt{ref\_xyz} 参数）：
+
+\begin{enumerate}
+    \item 对全局网格搜索解 $\mathbf{t}_{\mathrm{global}}$，同时评估以参考点 $\mathbf{t}_{\mathrm{ref}}$（上一阶段目标估计）为中心的局部邻域搜索解 $\mathbf{t}_{\mathrm{ref}}^*$；
+    \item 若 $\mathbf{t}_{\mathrm{global}}$ 落在区域角落（距两边界的距离均小于 $5\;\mathrm{m}$），比较两者的 NLL 值：若 $\mathcal{L}(\mathbf{t}_{\mathrm{global}})\geq\mathcal{L}(\mathbf{t}_{\mathrm{ref}}^*)-\epsilon_0$（$\epsilon_0$ 为与量测数 $K$ 相关的松弛量），采纳参考邻域解；
+    \item 若 $\mathbf{t}_{\mathrm{global}}$ 与 $\mathbf{t}_{\mathrm{ref}}$ 的二维距离超过预设跳变阈值（$\kappa\cdot R_{\mathrm{ref}}$，默认 $\kappa=2.5$），且 NLL 比较支持参考解，同样采纳参考邻域解。
+\end{enumerate}
+
+该机制在保证全局搜索能力的同时，利用阶段间目标估计的时序连续性抑制虚假收敛，是本文实现中保障定位鲁棒性的关键设计。
+
+\subsection{粗扫描初始定位}
+
+在多阶段轨迹优化启动前，UAV 对目标位置无任何先验信息。为获得 P2$(m)$ 所需的初始目标估计 $\hat{\mathbf{t}}^{(0)}$，需在起点附近执行一次\textbf{粗扫描（Stage 0）}，该过程本质上是 MLE 在 $K=4$ 个等高度悬停点下的特例：
+
+\begin{enumerate}
+    \item \textbf{悬停格点生成}：在起点 $(x_B,y_B)$ 的二维邻域内（默认 $40\;\mathrm{m}\times 40\;\mathrm{m}$）布置 $2\times 2=4$ 个悬停格点，飞行高度均为标称高度 $H$（对应 \texttt{build\_coarse\_scan\_hover\_points} 函数）；
+    \item \textbf{测距}：UAV 遍历各悬停点，在每个点悬停 $T_h$ 秒并向目标发射 ISAC 信号，接收回波以获取距离量测 $\{r[k]\}_{k=1}^{4}$；
+    \item \textbf{二维 MLE}：因 4 个等高度量测无法分辨目标高度，采用 2-D 模式（固定 $z$ 为中值）的网格搜索 MLE 获得 $(\hat{x}_t^{(0)},\hat{y}_t^{(0)})$；
+    \item \textbf{能耗扣减}：粗扫描消耗的飞行与悬停能量 $E_{\mathrm{scan}}$ 从总能量 $E_{\mathrm{tot}}$ 中扣减，剩余能量作为后续多阶段优化的预算。
+\end{enumerate}
+
+粗扫描获得的 $\hat{\mathbf{t}}^{(0)}$ 在精度上有限（仅 4 次量测，高度未分辨），但为 P2$(1)$ 的 CRB 计算提供了必要的参考点，使多阶段优化得以启动。
+
+
+% ======================================================================
+\section{扩展卡尔曼滤波（EKF）}
+\label{sec:ekf}
+% ======================================================================
+
+\subsection{问题背景与设计目标}
+
+\S\ref{sec:mle} 给出的 MLE 网格搜索方法具有批量处理的固有特征：每当一批新量测到达，必须将全部历史量测重新送入两级网格搜索，才能获得更新后的目标位置估计。设当前已累积悬停点 $K_{\text{total}}$ 个，网格搜索的格点数为 $N_{\text{grid}}$，则每次 MLE 的计算代价为 $\mathcal{O}(K_{\text{total}} \cdot N_{\text{grid}})$。此外，MLE 还要求存储全部历史悬停点坐标和对应的量测值，空间开销为 $\mathcal{O}(K_{\text{total}})$。在多阶段闭环框架中，这意味着每阶段结束后需额外留出一段"批量估计时间"，该时段内 UABV 的后续飞行决策无法受益于本阶段新获得的位置信息。
+
+扩展卡尔曼滤波（Extended Kalman Filter，EKF）以另一种方式组织估计过程：不维护完整的历史样本集，而是维护一组充分统计量——当前状态估计 $\hat{\mathbf{x}} \in \mathbb{R}^3$ 及其协方差矩阵 $\mathbf{P} \in \mathbb{R}^{3 \times 3}$。每次获得一个新量测，即刻用这组统计量吸收信息并丢弃原始数据。其计算和存储特征为：
+
+\begin{itemize}
+    \item 单次量测更新：常数次 $3 \times 3$ 矩阵运算，$\mathcal{O}(1)$ 时间；
+    \item 内存占用：仅 $\hat{\mathbf{x}}$ 和 $\mathbf{P}$，$\mathcal{O}(1)$ 空间；
+    \item 时序特征：量测一产生即被消化，估计即时更新，与 UAV 飞行过程在时间上交织。
+\end{itemize}
+
+在多阶段闭环中，上述第三个特征带来一项结构优势：UAV 沿阶段 $m$ 的优化轨迹 $\mathbf{S}_m^*$ 飞行时，在悬停点 $\mathcal{H}_m$ 处逐一测距，EKF 逐一递推；到阶段结束时，目标估计 $\hat{\mathbf{t}}^{(m)}$ 已经是本阶段全部量测序贯更新后的后验均值，可不经任何额外计算直接送入 P2$(m+1)$ 的 CRB 项作为参考点。
+
+代码层面，\texttt{simulation\_pipeline.py} 的 \texttt{run\_multistage\_with\_mle} 函数（第 339 行）通过 \texttt{localizer} 参数控制定位器选择：取 \texttt{"ekf"} 时实例化 \texttt{StaticRangeEKF3D} 类（\texttt{ekf\_range\_localization.py}，第 58 行），在粗扫描后调用 \texttt{ekf.reset} 初始化，随后在每个阶段内部以 \texttt{ekf.update\_one} 逐悬停点递推（第 435--438 行）；取 \texttt{"mle"} 时走批量网格搜索路径（第 439--444 行）。
+
+\subsection{状态空间模型}
+
+\subsubsection{状态向量与动态方程}
+
+待估计量为目标的三维空间坐标：
+
+\begin{equation}
+\mathbf{x} = \begin{bmatrix} x_t & y_t & z_t \end{bmatrix}^{\mathsf{T}} \in \mathbb{R}^3
+\label{eq:ekf_x}
+\end{equation}
+
+本文系统仅涉及静止目标。在未获取新量测的时间区间内，目标位置不发生物理变化，因此状态转移为恒等映射：
+
+\begin{equation}
+\mathbf{x}_k = \mathbf{x}_{k-1}, \qquad \mathbf{F} = \mathbf{I}_3
+\label{eq:ekf_dynamics}
+\end{equation}
+
+若在递推中严格遵守式\eqref{eq:ekf_dynamics}且不引入任何过程随机性（$\mathbf{Q} = \mathbf{0}$），则标准 Kalman 滤波的协方差传播退化为 $\mathbf{P}_{k|k-1} = \mathbf{P}_{k-1|k-1}$。随着量测不断注入，$\mathbf{P}_{k|k}$ 单调递减并最终趋于零矩阵。一旦 $\mathbf{P}$ 过小，Kalman 增益 $\mathbf{K}_k \propto \mathbf{P}_{k|k-1}$ 近于零，滤波器将对后续所有新息不再响应。此即\textbf{协方差坍缩}（covariance collapse）现象——即使新息中含有真实的修正信息（如初始粗扫描偏差、未建模的 NLOS 偏置、长递推序列累积的浮点舍入误差），滤波器也已"锁定"，无法修正。
+
+为此，在每一步协方差预测中注入极小量对角过程噪声 $\mathbf{Q}$，从数值上维持 $\mathbf{P}$ 的正定性：
+
+\begin{equation}
+\boxed{\mathbf{P}_{k|k-1} = \mathbf{P}_{k-1|k-1} + \mathbf{Q}}, \qquad
+\mathbf{Q} = \operatorname{diag}(q_{xy},\; q_{xy},\; q_z)
+\label{eq:ekf_Q_def}
+\end{equation}
+
+分量取值由地图尺度和目标高度范围决定：
+
+\begin{equation}
+q_{xy} = \max\!\Bigl((1.5 \times 10^{-4} \cdot \min(L_x, L_y))^2,\; 10^{-4}\Bigr), \qquad
+q_z = \max\!\Bigl((1.5 \times 10^{-4} \cdot (z_{t,\max} - z_{t,\min}))^2,\; 10^{-8}\Bigr)
+\label{eq:ekf_Q_vals}
+\end{equation}
+
+式\eqref{eq:ekf_Q_vals}中的下界 $10^{-4}$ 和 $10^{-8}$ 用于防范极小地图或高度范围时的退化。比例 $1.5 \times 10^{-4}$ 的选取逻辑为：两次量测之间等效允许目标"漂移"地图边长的万分之一量级——物理上可以忽略（不违背静止目标假设），但在数值上足以抵消浮点舍入引起的协方差坍缩。需明确：此处 $\mathbf{Q}$ 的职能是\textbf{数值正则化}，而非为目标运动建模。对应实现为 \texttt{default\_process\_variance} 函数（\texttt{ekf\_range\_localization.py} 第 49--55 行）。
+
+\subsubsection{量测方程}
+
+在第 $k$ 次递推中，UAV 的悬停位置 $\mathbf{u}_k = \mathbf{h}[k] \in \mathbb{R}^3$ 已知。UAV 在该点发射 ISAC 信号，经目标反射后接收，通过估计往返时延获得距离量测 $z_k \in \mathbb{R}$。量测方程为状态的非线性函数叠加零均值高斯噪声：
+
+\begin{equation}
+z_k = h(\mathbf{x}) + v_k, \qquad
+h(\mathbf{x}) = \|\mathbf{u}_k - \mathbf{x}\|_2, \qquad
+v_k \sim \mathcal{N}(0, R_k)
+\label{eq:ekf_meas}
+\end{equation}
+
+\subsubsection{量测噪声方差的异方差结构}
+
+$R_k$ 并非全局常数——它通过感知信道的物理特性依赖于 UAV 到目标的距离。具体路径为：
+
+\begin{enumerate}
+    \item UAV 到目标的斜距决定感知信道增益：$g_k = \beta_0 / d_{s,k}^4$（双程传播，路径损耗指数为 4，见第 2 章式\eqref{eq:channel_gain_sensing}）；
+    \item 感知信噪比 $\gamma_s = P_w G_p g_k / \sigma_0^2$；
+    \item 基于 ToA 估计的 CRB，测距方差与 SNR 成反比：$\sigma_{\text{toa}}^2 = a / \gamma_s$（$a$ 为与波形和有效带宽相关的系统常数，见第 2 章式\eqref{eq:measurement_variance}）。
+\end{enumerate}
+
+综上，$R_k$ 的显式表达为：
+
+\begin{equation}
+g_k = \frac{\beta_{0,\text{est}}}{d_{s,k}^4}, \qquad
+R_k = \max\!\left( \frac{a \cdot \sigma_0^2}{P_w \cdot G_p \cdot g_k},\; 10^{-12} \right)
+\label{eq:ekf_Rk_def}
+\end{equation}
+
+其中 $d_{s,k} = \|\mathbf{u}_k - \hat{\mathbf{x}}_{k|k-1}\|$ 是在当前状态预测点处评估的斜距。式\eqref{eq:ekf_Rk_def}中 $\max(\cdot, 10^{-12})$ 的职能是防止斜距过小（$d_{s,k} \to 0 \Rightarrow g_k \to \infty$）时 $R_k$ 下溢，保障后续新息协方差的正定性。
+
+将 $g_k$ 代入后可得 $R_k$ 对距离的标度关系：
+
+\begin{equation}
+R_k \propto d_{s,k}^4
+\label{eq:Rk_scaling}
+\end{equation}
+
+式\eqref{eq:Rk_scaling}具有直接的工程含义：$d_{s,k}$ 减半，$R_k$ 降至 $1/16$。因此，当 UAV 悬停在目标近旁时，量测噪声极小，滤波器通过 $R_k$ 的降低自动赋予该量测高置信度；当 UAV 远离目标时，量测噪声急剧增大，滤波器自动降低该量测的影响力。这一机制将物理信道的距离依赖特性天然嵌入了统计推断过程中，无需人工设定置信权重。
+
+\textbf{模型失配}：式\eqref{eq:ekf_Rk_def}中的参数带有下标 ``est''，表示定位器侧使用的估计值可能与真实环境参数存在偏差：
+\begin{equation}
+H_{\text{est}} = H + \Delta H, \qquad
+\beta_{0,\text{est}} = \beta_0 \cdot 10^{\Delta\beta_0 / 10}
+\label{eq:model_mismatch}
+\end{equation}
+其中 $\Delta H$ 和 $\Delta\beta_0$ 为场景配置的失配量（\texttt{SimConfig.model\_mismatch\_h} 与 \texttt{model\_mismatch\_beta0\_db}）。$\Delta H$ 影响 $\mathbf{u}_k$ 的 $z$ 坐标从而影响 $d_{s,k}$ 的计算，$\Delta\beta_0$ 直接影响 $g_k$ 从而影响 $R_k$。两者共同决定了定位器对真实物理世界的认知偏差。该逻辑位于 \texttt{StaticRangeEKF3D.\_predicted\_range\_and\_H\_and\_R} 方法（第 88--101 行）。
+
+\subsection{EKF 递推公式}
+
+设第 $k-1$ 步结束时的后验为 $\hat{\mathbf{x}}_{k-1|k-1}$ 和 $\mathbf{P}_{k-1|k-1}$。对第 $k$ 次量测的完整处理流程如下。
+
+\subsubsection{预测步}
+
+状态预测：由于 $\mathbf{F} = \mathbf{I}_3$，均值不变。
+
+\begin{equation}
+\hat{\mathbf{x}}_{k|k-1} = \hat{\mathbf{x}}_{k-1|k-1}
+\label{eq:ekf_pred_x}
+\end{equation}
+
+协方差预测：叠加过程噪声以扩张不确定性。
+
+\begin{equation}
+\mathbf{P}_{k|k-1} = \mathbf{P}_{k-1|k-1} + \mathbf{Q}
+\label{eq:ekf_pred_P}
+\end{equation}
+
+这一扩张的物理含义是：从上一个量测到现在，状态已"自由演化"了一个时间步，我们对目标位置的认知理应增加一份最基本的不可减约不确定度。
+
+\subsubsection{线性化步}
+
+量测函数 $h(\mathbf{x}) = \|\mathbf{u}_k - \mathbf{x}\|$ 在预测点 $\hat{\mathbf{x}}_{k|k-1}$ 处的一阶偏导构成 $1 \times 3$ 的 Jacobian 行向量：
+
+\begin{equation}
+\mathbf{H}_k = \frac{\partial h}{\partial \mathbf{x}}\Bigr|_{\hat{\mathbf{x}}_{k|k-1}}
+= \begin{bmatrix}
+-\dfrac{x_k^u - \hat{x}_{k|k-1}}{d_{s,k}} &
+-\dfrac{y_k^u - \hat{y}_{k|k-1}}{d_{s,k}} &
+-\dfrac{z_k^u - \hat{z}_{k|k-1}}{d_{s,k}}
+\end{bmatrix}
+\label{eq:ekf_H_def}
+\end{equation}
+
+记 $\bm{\Delta}_k = \mathbf{u}_k - \hat{\mathbf{x}}_{k|k-1}$，则 $\mathbf{H}_k = -\bm{\Delta}_k^{\mathsf{T}} / d_{s,k}$。$\mathbf{H}_k$ 的几何含义是：其第 $d$ 个分量 $-\Delta_d / d_{s,k}$ 等于沿 $d$ 轴的单位目标位置偏差所引起的距离量测变化量。若 $\Delta_d \approx 0$（该方向与 UAV-目标连线正交），则该方向的位置误差几乎不在距离量测上留下印记——滤波器在当前量测中无法感知该方向的信息。这一事实解释了单个距离量测为何不足以确定目标的三维坐标：一次测距仅提供沿视线方向的一维约束。
+
+与此同时，在预测点处评估量测模型的参数：
+
+\begin{equation}
+d_{s,k} = \max\bigl(\|\bm{\Delta}_k\|,\; 10^{-6}\bigr), \qquad
+R_k = \max\!\left( \frac{a \cdot \sigma_0^2 \cdot d_{s,k}^4}{P_w \cdot G_p \cdot \beta_{0,\text{est}}},\; 10^{-12} \right)
+\label{eq:ekf_H_params}
+\end{equation}
+
+其中 $d_{s,k}$ 的 $\max(\cdot, 10^{-6})$ 防止 UAV 恰好位于目标估计位置时 Jacobian 的分母为零。
+
+\subsubsection{更新步}
+
+实际量测 $z_k$ 到达后，首先计算新息（innovation）——观测值与基于状态预测的期望观测值之差：
+
+\begin{equation}
+\tilde{z}_k = z_k - h(\hat{\mathbf{x}}_{k|k-1}) = z_k - d_{s,k}
+\label{eq:ekf_innov}
+\end{equation}
+
+$\tilde{z}_k$ 是一个标量：正值表示实测距离大于预期（目标比估计位置更远），负值反之，零值表示观测与预测完全一致。
+
+新息协方差（标量）为预测不确定性与量测不确定性在观测空间中的和：
+
+\begin{equation}
+S_k = \mathbf{H}_k \mathbf{P}_{k|k-1} \mathbf{H}_k^{\mathsf{T}} + R_k
+\label{eq:ekf_Sk}
+\end{equation}
+
+为防止 $S_k$ 在极端条件下退化（$R_k$ 可能已被钳位至下界，$\mathbf{H}_k \mathbf{P}_{k|k-1} \mathbf{H}_k^{\mathsf{T}}$ 可能因 $\mathbf{P}$ 的数值问题接近零），对其施加额外下界：
+
+\begin{equation}
+S_k \leftarrow \max(S_k,\; 10^{-18})
+\label{eq:ekf_Sk_clamp}
+\end{equation}
+
+Kalman 增益为 $3 \times 1$ 向量：
+
+\begin{equation}
+\mathbf{K}_k = \mathbf{P}_{k|k-1} \mathbf{H}_k^{\mathsf{T}} \, S_k^{-1}
+\label{eq:ekf_Kk}
+\end{equation}
+
+增益的每一分量给出对应坐标方向的修正步长。其结构体现了预测-量测不确定性的自动权衡：若 $\mathbf{P}$ 大（状态不确定），增益升高，滤波器更依赖新量测；若 $S_k$ 大（新息不可靠），增益降低，滤波器保守维持原估计。
+
+状态后验更新：
+
+\begin{equation}
+\hat{\mathbf{x}}_{k|k} = \hat{\mathbf{x}}_{k|k-1} + \mathbf{K}_k \cdot \tilde{z}_k
+\label{eq:ekf_x_post}
+\end{equation}
+
+修正方向由 $\mathbf{K}_k \propto \mathbf{P}_{k|k-1} \mathbf{H}_k^{\mathsf{T}} = -\mathbf{P}_{k|k-1} \bm{\Delta}_k / d_{s,k}$ 决定：当 $\tilde{z}_k > 0$（目标比预期远），修正沿 $-\mathbf{P}_{k|k-1} \bm{\Delta}_k$ 方向，即估计向远离 UAV 的方向移动。
+
+协方差后验更新采用 Joseph 对称形式：
+
+\begin{equation}
+\mathbf{P}_{k|k} = (\mathbf{I}_3 - \mathbf{K}_k \mathbf{H}_k) \mathbf{P}_{k|k-1} (\mathbf{I}_3 - \mathbf{K}_k \mathbf{H}_k)^{\mathsf{T}} + \mathbf{K}_k R_k \mathbf{K}_k^{\mathsf{T}}
+\label{eq:ekf_P_post}
+\end{equation}
+
+Joseph 形式相比等效的标准形式 $\mathbf{P}_{k|k} = (\mathbf{I} - \mathbf{K}_k \mathbf{H}_k) \mathbf{P}_{k|k-1}$ 的优势在于数值稳定性：通过在 $\mathbf{P}_{k|k-1}$ 两侧同时作用 $(\mathbf{I} - \mathbf{K}_k \mathbf{H}_k)$，即便在存在舍入误差的长递推中也能保障结果矩阵的对称性和半正定性。
+
+在 Joseph 更新后，对 $\mathbf{P}_{k|k}$ 执行\textbf{显式对称化}以消除可能残留的反对称浮点误差：
+
+\begin{equation}
+\mathbf{P}_{k|k} \leftarrow \frac{1}{2}\bigl( \mathbf{P}_{k|k} + \mathbf{P}_{k|k}^{\mathsf{T}} \bigr)
+\label{eq:ekf_P_sym}
+\end{equation}
+
+式\eqref{eq:ekf_P_sym}的代价仅为 9 次加法，但能杜绝 $\mathbf{P}$ 因反对称漂移而丧失正定性的可能。
+
+\subsubsection{高度裁剪}
+
+在上述更新完成后，将 $\hat{z}_{k|k}$ 硬约束至目标高度物理范围：
+
+\begin{equation}
+\hat{z}_{k|k} \leftarrow \operatorname{clip}\bigl( \hat{z}_{k|k},\; z_{t,\min},\; z_{t,\max} \bigr)
+\label{eq:ekf_z_clip}
+\end{equation}
+
+裁剪的必要性源于量测几何对 $z$ 的弱可观性：在滤波初期（或在所有悬停点高度相近的阶段），FIM 沿 $z$ 方向近似秩亏，$\hat{z}$ 可能仅因噪声扰动而缓慢漂移超出物理边界。通过将 $z$ 估计硬性约束在已知范围，利用目标的物理先验补偿了量测几何在高度方向上的信息匮乏。
+
+\subsection{递推过程的数值保障——五层防护}
+
+将上述各步骤中嵌入的数值保护整理如下：
+
+\begin{enumerate}
+    \item \textbf{斜距下界}（$d_{s,k} \ge 10^{-6}$）：若 UAV 恰位于目标估计位置，$d_{s,k} = 0$ 将导致式\eqref{eq:ekf_H_def} 的分母为零。下界 $10^{-6}\,\text{m}$ 远小于任何有物理意义的距离，不影响估计精度。位于 \texttt{ekf\_range\_localization.py} 第 96 行。
+    \item \textbf{量测噪声下界}（$R_k \ge 10^{-12}$）：$d_{s,k} \to 0 \Rightarrow g_k \to \infty \Rightarrow$ 式\eqref{eq:ekf_Rk_def} 的分子趋于零。下界 $10^{-12}$ 保证 $S_k$ 的正定性。位于第 99 行。
+    \item \textbf{新息协方差下界}（$S_k \ge 10^{-18}$）：即便 $R_k$ 有下界，$\mathbf{H}_k \mathbf{P} \mathbf{H}_k^{\mathsf{T}}$ 在 $\mathbf{P}$ 近零时仍可趋于零。下界 $10^{-18}$ 消除式\eqref{eq:ekf_Kk} 中的除零风险。位于第 114--115 行。
+    \item \textbf{Joseph 形式 + 显式对称化}：Joseph 更新（式\eqref{eq:ekf_P_post}）在结构上保证结果对称半正定；式\eqref{eq:ekf_P_sym} 的显式对称化消除浮点反对称残差。位于第 121--122 行。
+    \item \textbf{高度裁剪}（式\eqref{eq:ekf_z_clip}）：利用物理先验约束弥补量测几何不足，位于第 118 行。
+\end{enumerate}
+
+以上五项措施的量级远低于典型 $R_k$ 值（$10^{-2} \sim 10^2$），在数学上不影响 EKF 的渐近性质，但在工程上构成了滤波器在长序列、恶化几何、模型失配等非理想条件下稳定运行的基础。
+
+\subsection{滤波器初始化}
+
+EKF 需要一组初始先验 $(\hat{\mathbf{x}}_{0|0}, \mathbf{P}_{0|0})$ 以启动递推。这一初始化依托于粗扫描（Stage 0）的输出。
+
+\textbf{均值初值}：粗扫描阶段在 $2 \times 2$ 个等高度悬停格点上执行二维 MLE（$z$ 方向不可观，$z$ 固定为中值），获得 $(\hat{x}_t^{(0)}, \hat{y}_t^{(0)})$。EKF 的状态初始化为：
+
+\begin{equation}
+\hat{\mathbf{x}}_{0|0} = \begin{bmatrix}
+\hat{x}_t^{(0)} & \hat{y}_t^{(0)} & \dfrac{z_{t,\min} + z_{t,\max}}{2}
+\end{bmatrix}^{\mathsf{T}}
+\label{eq:ekf_init_x}
+\end{equation}
+
+高度以目标高度范围中值作为在无信息下的最小偏置猜测。
+
+\textbf{协方差初值}：粗扫描仅有 4 次量测且所有悬停点共面，信息量有限。对三个方向分别设定先验方差以反映此不确定性：
+
+\begin{equation}
+\mathbf{P}_{0|0} = \operatorname{diag}\bigl( \sigma_x^2,\; \sigma_y^2,\; \sigma_z^2 \bigr), \qquad
+\begin{aligned}
+\sigma_x^2 = \sigma_y^2 &= \bigl( 0.33 \cdot \min(L_x, L_y) \bigr)^2, \\
+\sigma_z^2 &= \bigl( 0.50 \cdot (z_{t,\max} - z_{t,\min}) \bigr)^2
+\end{aligned}
+\label{eq:ekf_init_P}
+\end{equation}
+
+水平方向标准差约为地图短边长的 32\%——4 次等高度量测可以大致定位但精度有限；高度方向标准差为高度范围的一半——完全未分辨，取最大熵先验。这一设定遵循保守原则（先验方差宁大勿小），以免滤波器过早锁定于粗扫描可能存在的偏差。
+
+对应的代码入口为 \texttt{StaticRangeEKF3D.reset} 方法（第 72--82 行），该方法接受粗扫描估计 $\mathbf{x}_0$ 和可选的自定义 $\mathbf{P}_0$；若后者未提供，则通过 \texttt{default\_prior\_variance} 函数（第 37--46 行）按式\eqref{eq:ekf_init_P} 自动生成。
+
+\subsection{在多阶段闭环中的集成}
+
+\subsubsection{初始化阶段}
+
+在多阶段主循环（\texttt{run\_multistage\_with\_mle}，第 339 行）启动前，系统已完成粗扫描并获得了初始目标估计 \texttt{target\_hat\_xyz}。若定位模式为 \texttt{"ekf"}，则在进入阶段循环之前执行：
+
+\begin{center}
+\begin{minipage}{0.85\textwidth}
+\begin{verbatim}
+ekf = StaticRangeEKF3D(cfg)
+ekf.reset(target_hat_xyz)
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\texttt{reset} 将 \texttt{target\_hat\_xyz} 写入 \texttt{x\_hat}（$z$ 分量自动裁剪至 $[z_{t,\min}, z_{t,\max}]$），并按式\eqref{eq:ekf_init_P} 设置 \texttt{P}。此即 \texttt{simulation\_pipeline.py} 第 383--386 行的逻辑。
+
+\subsubsection{阶段内递推}
+
+对第 $m$ 阶段（$m = 1, 2, \ldots$），SCA 求解器输出最优轨迹 $\mathbf{S}_m^*$，从中提取悬停点 $\mathcal{H}_m = \{\mathbf{h}_m[k]\}_{k=1}^{K_m}$（其中 $\mathbf{h}_m[k] = \mathbf{S}_m^*[k\mu]$）。UAV 沿轨迹飞行，在悬停点 $\mathbf{h}_m[k]$ 处发射 ISAC 信号并采集距离量测 $z_{m,k}$（通过 \texttt{simulate\_range\_measurements} 函数模拟生成）。每获得一个量测，即刻调用：
+
+\begin{center}
+\begin{minipage}{0.85\textwidth}
+\begin{verbatim}
+ekf.update_one(hov[j, :], float(measured_ds_stage[j]))
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\texttt{update\_one} 方法（第 103--122 行）内部依次执行：
+
+\begin{enumerate}
+    \item \texttt{predict\_static}：$\mathbf{P} \leftarrow \mathbf{P} + \operatorname{diag}(\mathbf{q})$；
+    \item \texttt{\_predicted\_range\_and\_H\_and\_R}：在 $\hat{\mathbf{x}}_{k|k-1}$ 处评估 $d_s$、$R$ 和 $\mathbf{H}$；
+    \item 计算新息 $\tilde{z} = z - d_s$ 和新息协方差 $S = \mathbf{H}\mathbf{P}\mathbf{H}^{\mathsf{T}} + R$（钳位 $S \ge 10^{-18}$）；
+    \item 计算增益 $\mathbf{K} = \mathbf{P}\mathbf{H}^{\mathsf{T}} / S$；
+    \item 更新 $\hat{\mathbf{x}} \leftarrow \hat{\mathbf{x}} + \mathbf{K}\tilde{z}$，裁剪 $\hat{z}$；
+    \item Joseph 更新 $\mathbf{P}$，对称化 $\mathbf{P} \leftarrow (\mathbf{P} + \mathbf{P}^{\mathsf{T}})/2$。
+\end{enumerate}
+
+$K_m$ 个悬停点的量测全部处理完毕后，阶段结束。此时 \texttt{ekf.x\_hat} 即为更新后的目标估计 $\hat{\mathbf{t}}^{(m)}$，被写入 \texttt{target\_hat\_xyz} 并送入下一阶段的 \texttt{StageData.target\_hat\_xyz}，用于 P2$(m+1)$ 中 CRB 项的线性化。\texttt{ekf.P} 保持连续，不被重置——它累积反映了自粗扫描以来全部量测所带来的不确定性缩减。
+
+该流程在代码中的对应位置为 \texttt{simulation\_pipeline.py} 第 435--438 行。
+
+\subsection{整体递推流程}
+
+将以上内容整合，得到单阶段内 EKF 逐量测递推的完整算法。
+
+\begin{algorithm}[htbp]
+\caption{逐量测 EKF 递推（对应 \texttt{ekf.update\_one}）}
+\label{alg:ekf}
+\begin{algorithmic}[1]
+\REQUIRE $\hat{\mathbf{x}} \in \mathbb{R}^3$（当前状态估计），$\mathbf{P} \in \mathbb{R}^{3 \times 3}$（当前协方差），$\{(\mathbf{u}_k, z_k)\}_{k=1}^{K}$（悬停点坐标与对应量测）
+\ENSURE 更新后的 $\hat{\mathbf{x}}$ 和 $\mathbf{P}$
+
+\FOR{$k = 1$ \TO $K$}
+    \STATE \textbf{// 预测}
+    \STATE $\mathbf{P} \leftarrow \mathbf{P} + \operatorname{diag}(q_{xy}, q_{xy}, q_z)$ \quad $\triangleright$ 式\eqref{eq:ekf_Q_def}，\texttt{predict\_static}
+    \STATE $\mathbf{x}^{-} \leftarrow \hat{\mathbf{x}}$
+
+    \STATE \textbf{// 线性化与参数评估}
+    \STATE $\bm{\Delta} \leftarrow \mathbf{u}_k - \mathbf{x}^{-}$
+    \STATE $d_s \leftarrow \max(\|\bm{\Delta}\|,\; 10^{-6})$
+    \STATE $\mathbf{H} \leftarrow [-\Delta_x/d_s,\; -\Delta_y/d_s,\; -\Delta_z/d_s]$ \quad $\triangleright$ 式\eqref{eq:ekf_H_def}
+    \STATE $R \leftarrow \max\!\bigl(a \cdot \sigma_0^2 \cdot d_s^4 \,/\, (P_w \cdot G_p \cdot \beta_{0,\text{est}}),\; 10^{-12}\bigr)$ \quad $\triangleright$ 式\eqref{eq:ekf_Rk_def}
+
+    \STATE \textbf{// 新息与增益}
+    \STATE $\tilde{z} \leftarrow z_k - d_s$ \quad $\triangleright$ 式\eqref{eq:ekf_innov}
+    \STATE $S \leftarrow \max(\mathbf{H}\mathbf{P}\mathbf{H}^{\mathsf{T}} + R,\; 10^{-18})$ \quad $\triangleright$ 式\eqref{eq:ekf_Sk}--\eqref{eq:ekf_Sk_clamp}
+    \STATE $\mathbf{K} \leftarrow \mathbf{P}\mathbf{H}^{\mathsf{T}} \,/\, S$ \quad $\triangleright$ 式\eqref{eq:ekf_Kk}
+
+    \STATE \textbf{// 更新}
+    \STATE $\hat{\mathbf{x}} \leftarrow \mathbf{x}^{-} + \mathbf{K} \cdot \tilde{z}$ \quad $\triangleright$ 式\eqref{eq:ekf_x_post}
+    \STATE $\hat{z} \leftarrow \operatorname{clip}(\hat{z},\; z_{t,\min},\; z_{t,\max})$ \quad $\triangleright$ 式\eqref{eq:ekf_z_clip}
+    \STATE $\mathbf{P} \leftarrow (\mathbf{I}_3 - \mathbf{K}\mathbf{H})\,\mathbf{P}\,(\mathbf{I}_3 - \mathbf{K}\mathbf{H})^{\mathsf{T}} + R \cdot \mathbf{K}\mathbf{K}^{\mathsf{T}}$ \quad $\triangleright$ 式\eqref{eq:ekf_P_post}
+    \STATE $\mathbf{P} \leftarrow (\mathbf{P} + \mathbf{P}^{\mathsf{T}}) \,/\, 2$ \quad $\triangleright$ 式\eqref{eq:ekf_P_sym}
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+算法 \ref{alg:ekf} 的每轮循环仅涉及 $3 \times 3$ 矩阵与 $3 \times 1$ 向量的有限次乘加运算，不依赖 $K$。$K$ 次循环的总计算量为 $\mathcal{O}(K)$；内存占用量与 $K$ 无关，恒为 $\mathcal{O}(1)$。
+
+\subsection{小结}
+
+EKF 以恒定位置模型（$\mathbf{F} = \mathbf{I}_3$）配合极小过程噪声（$\mathbf{Q}$）建立了递推定位框架。其核心机制可归结为三条：
+
+\begin{enumerate}
+    \item \textbf{一阶线性化}：在每个递推步，将非线性量测函数 $h(\mathbf{x}) = \|\mathbf{u}_k - \mathbf{x}\|$ 在状态预测值处作一阶泰勒展开，使滤波问题局部退化为线性 Kalman 滤波；
+    \item \textbf{异方差自适应}：量测噪声方差 $R_k$ 正比于 $d_{s,k}^4$，使滤波器在近距离量测上自动赋予高权重、远距离量测上自动降权，将物理信道的距离依赖嵌入统计推断；
+    \item \textbf{递推计算}：每次量测以 $\mathcal{O}(1)$ 时间、$\mathcal{O}(1)$ 空间完成更新，与 MLE 的批量网格搜索形成互补——前者适合在线实时场景，后者适合离线精密场景。
+\end{enumerate}
+
+五层数值防护（斜距下界、$R$ 下界、$S$ 下界、Joseph 对称更新、显式对称化）与高度裁剪共同保障了滤波器在工程实现中的鲁棒性。在多阶段闭环框架中，EKF 以跨阶段连续递推的方式运行——$\hat{\mathbf{x}}$ 和 $\mathbf{P}$ 在阶段间无缝传递，使每一阶段的轨迹规划都能受益于历史全部量测所提炼出的最优当前估计。
+
+
+% ======================================================================
+\section{MLE 与 EKF 的对比分析}
+\label{sec:comparison}
+% ======================================================================
+
+\subsection{估计性质}
+
+\begin{itemize}
+    \item \textbf{MLE}：在大样本条件下，MLE 是渐近无偏且渐近有效的估计量（其协方差趋于 CRB）。在本文的异方差高斯模型中，似然函数完整刻画了方差对参数的依赖，因此 MLE 充分利用了量测的统计信息。然而，网格搜索的估计精度受限于网格分辨率，且在量测噪声极大的场景下，似然函数可能在多个区域出现相近的极小值，导致歧义。
+    \item \textbf{EKF}：EKF 以量测函数的一阶泰勒展开为基础，本质上是近似的次优滤波器。其估计在非线性较强时带有线性化偏差，且 Joseph 协方差更新给出的 $\mathbf{P}_{k|k}$ 仅是真实后验协方差的近似。但 EKF 的计算量恒定、内存需求小，适合在线部署。
+\end{itemize}
+
+\subsection{计算与存储复杂度}
+
+设累积悬停点总数为 $K_{\mathrm{total}}$，网格搜索的格点数为 $N_{\mathrm{grid}}$。
+
+\begin{itemize}
+    \item \textbf{MLE}：每阶段结束时需以全部 $K_{\mathrm{total}}$ 个量测遍历 $N_{\mathrm{grid}}$ 个格点，时间复杂度为 $\mathcal{O}(K_{\mathrm{total}}\cdot N_{\mathrm{grid}})$。需存储全部历史量测和悬停点坐标，空间复杂度为 $\mathcal{O}(K_{\mathrm{total}})$。
+    \item \textbf{EKF}：每量测仅执行常数次向量运算（式\eqref{eq:ekf_pred_x}--\eqref{eq:ekf_P_post}），时间复杂度为 $\mathcal{O}(1)$ per measurement，总计 $\mathcal{O}(K_{\mathrm{total}})$。仅需维护状态均值 $\hat{\mathbf{x}}\in\mathbb{R}^3$ 和协方差矩阵 $\mathbf{P}\in\mathbb{R}^{3\times 3}$，空间复杂度为 $\mathcal{O}(1)$。
+\end{itemize}
+
+在本文的多阶段框架中（$K_{\mathrm{total}}$ 通常为 $10^1\sim 10^2$ 量级），两种方法的计算耗时均在秒级以内，不会成为系统瓶颈。但当 $K_{\mathrm{total}}$ 增至 $10^3$ 以上时，EKF 的计算量优势将突显。
+
+\subsection{对非理想因素的响应}
+
+两类方法使用相同的量测噪声模型（式\eqref{eq:ekf_Rk_def}），因此对模型失配（$\Delta H$ 和 $\Delta\beta_0$）的系统性响应一致——$R_k$ 的估计偏差会同时影响 MLE 的似然权重和 EKF 的 Kalman 增益。主要差异在于：
+
+\begin{itemize}
+    \item \textbf{NLOS 偏置}：仿真中注入的正值 NLOS 偏置（均值为 $\mu_{\mathrm{NLOS}}$）使量测系统性偏高。MLE 和 EKF 均未显式建模该偏置，因此估计会向远离悬停点的方向偏移。MLE 的批量性质使其可通过残差分析检测异常量测，而 EKF 的递推性质使其对单个偏置量测的响应更即时但也更敏感。
+    \item \textbf{野值}：大偏差野值对 EKF 的瞬时冲击显著——若某一量测的 $R_k$ 被严重低估，Kalman 增益将过高，导致估计大幅跳变。MLE 批量处理对单个或少量野值具有天然的统计稀释效应。
+\end{itemize}
+
+\subsection{在多阶段闭环中的角色}
+
+两种方法在本文的多阶段闭环框架中以互补方式运行（对应 \texttt{simulation\_pipeline.py} 中 \texttt{run\_multistage\_with\_mle} 的 \texttt{localizer} 参数）：
+
+\begin{itemize}
+    \item \textbf{MLE 路径}：每阶段结束后，以\textbf{全部累积量测}为输入，执行完整的网格搜索，获得该时刻最精确的离线估计。适用于对定位精度要求极高的后处理场景。
+    \item \textbf{EKF 路径}：每阶段内部\textbf{逐悬停点递推}更新，阶段结束时的后验直接作为下一阶段的先验。适用于需要在线自适应轨迹更新的实时场景。
+\end{itemize}
+
+实践中的推荐策略是：粗扫描阶段统一使用 2-D MLE 获得初始估计；后续阶段可根据应用需求选择 MLE（精度优先）或 EKF（实时性优先）。
+
+
+% ======================================================================
+\section{本章小结}
+\label{sec:summary_ch4}
+% ======================================================================
+
+本章从以下三个方面完整阐述了基于距离量测的目标三维定位方法：
+
+\begin{enumerate}
+    \item \textbf{MLE 最大似然估计}（\S\ref{sec:mle}）：建立了异方差高斯量测下的负对数似然函数，设计了粗-精两级网格搜索算法以在非凸似然面上求解全局最优；针对粗扫描阶段的 $z$ 不可观问题引入 2-D 搜索模式，以及参考点守卫机制抑制虚假收敛；粗扫描作为 MLE 的特例，以 4 个等高度悬停点提供初始目标估计。
+    \item \textbf{EKF 扩展卡尔曼滤波}（\S\ref{sec:ekf}）：以恒定位置状态空间模型为基础，推导了异方差量测下的 Jacobian 线性化、Joseph 协方差更新和状态裁剪的完整递推公式；给出了基于粗扫描结果的先验协方差初始化方案，以及 EKF 在多阶段闭环中的集成方式。
+    \item \textbf{两种方法的对比}（\S\ref{sec:comparison}）：从估计性质、计算与存储复杂度、对 NLOS 偏置/野值/模型失配的响应、以及在多阶段闭环中的适用场景四个维度进行了系统的理论对比。
+\end{enumerate}
+
+以上定位方法与第3章的轨迹优化算法共同构成了本文 ISAC 系统的完整闭环。各函数与代码模块的对应关系已在相关小节中标明。第5章将通过数值仿真对 MLE 和 EKF 在不同场景下的定位性能进行定量评估与对比。
+
+% ----------------------------------------------------------------------
+\begin{thebibliography}{10}
+
+\bibitem{Kay1993}
+S.~M.~Kay.
+\textit{Fundamentals of Statistical Signal Processing: Estimation Theory}.
+Prentice-Hall, 1993.
+
+\bibitem{Rangzenegger2020}
+S.~Rangzenegger, R.~Prassler, H.~Bischof.
+``On the Cram\'{e}r-Rao Lower Bound for Time-of-Arrival Based Positioning,''
+\textit{IEEE Trans. Signal Process.}, 2020.
+
+\bibitem{BarShalom2001}
+Y.~Bar-Shalom, X.~R.~Li, T.~Kirubarajan.
+\textit{Estimation with Applications to Tracking and Navigation}.
+Wiley, 2001.
+
+\bibitem{Jing2022}
+X.~Jing, F.~Liu, C.~Masouros, Y.~Zeng.
+``ISAC from the Sky: UAV Trajectory Design for Joint Communication and Target Localization,''
+\textit{IEEE Trans. Wireless Commun.}, 2022.
+
+\end{thebibliography}

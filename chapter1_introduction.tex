@@ -1,0 +1,259 @@
+\chapter{绪论}
+
+\section{研究背景与意义}
+
+下一代无线通信网络（6G）被期望超越传统通信服务，提供高精度、高鲁棒性的感知服务，包括目标定位、跟踪与导航等功能[1,2]。在传统无线系统中，通信与感知（Communication and Sensing, C\&S）通常被视为两个独立的功能模块，在硬件平台、频谱资源和信号处理流程上分别设计，导致频谱效率低下和硬件成本高昂[3]。为解决这一问题，通信感知一体化（Integrated Sensing and Communications, ISAC）作为一种使通信与感知共享同一硬件平台、同一频谱资源乃至同一波形的技术范式，已成为6G研究的关键方向之一[2,4]。
+
+与此同时，无人机（Unmanned Aerial Vehicle, UAV）凭借其高机动性、灵活部署能力和视距（Line-of-Sight, LoS）信道优势，被广泛认为是未来无线网络中不可或缺的组成部分[5,6]。UAV可作为空中基站为地面用户提供按需通信覆盖[7]，也可作为空中感知平台对地面目标进行定位与跟踪[8]。然而，UAV的载荷能力和机载电池容量严重受限，若同时搭载独立的通信与感知两套射频硬件，将极大增加载荷重量，降低UAV的机动性和续航能力。ISAC技术通过硬件复用和波形共享，能够在单一射频平台上同时实现通信与感知功能，天然契合UAV平台对轻量化、低功耗的迫切需求[9]。
+
+在此背景下，本文聚焦于UAV-ISAC系统中的轨迹设计问题，旨在通过优化UAV的飞行路径，在有限机载能量约束下，同时提升下行通信速率与目标定位精度。下面分别从通感一体化技术、UAV辅助通信与感知、UAV-ISAC交叉领域以及CRB定位理论四个维度，对国内外研究现状进行综述。
+
+\section{国内外研究现状}
+
+\subsection{通信感知一体化技术}
+
+通信与感知的融合并非一蹴而就，而是经历了从松耦合到紧耦合的渐进演进过程。根据二者的集成深度，可将其划分为三个层次[3,4]：
+
+\textbf{（1）频谱共存（Coexistence）}：通信与感知系统在相同频段内独立运行，通过干扰管理技术（如频谱感知、动态频谱接入、功率控制等）实现互不干扰的协同工作。该阶段的代表性工作包括基于机会频谱接入的雷达-通信频谱共享[10]、基于合作感知的干扰对齐等。共存方案的优势在于对现有系统的改动最小，缺点是频谱利用率提升有限，且通信与感知之间缺乏信息层面的协同增益。
+
+\textbf{（2）协同合作（Cooperation）}：通信与感知系统之间开始共享部分信息（如目标位置、信道状态信息等），以提升各自的功能性能。例如，雷达可以利用通信系统提供的信道信息辅助目标检测，通信系统可以利用雷达感知的环境信息优化波束管理。该阶段的典型工作包括雷达辅助的预测波束赋形[11]、通信辅助的雷达目标跟踪等。
+
+\textbf{（3）一体化设计（Co-design / Full Integration）}：通信与感知共享统一的硬件平台、射频前端和发射波形，从信号处理层面实现深度融合，即双功能雷达通信（Dual-Functional Radar-Communication, DFRC）系统[3]。DFRC是当前ISAC研究的核心范式，其核心挑战在于：通信与感知通常具有不同的设计目标（通信追求高容量和低误码率，感知追求高分辨率和低估计误差），如何在共享资源的约束下实现二者的最优折衷。
+
+在DFRC框架下，关键技术包括波形设计、波束赋形/预编码和信号处理三个方面：
+
+\textbf{波形设计方面}，研究者提出了多种适用于ISAC的波形方案。基于正交频分复用（OFDM）的ISAC波形被广泛研究，其优势在于通信性能成熟、子载波灵活分配，且可利用OFDM符号的调制信息实现雷达感知[12]。基于扩频序列的方案[13,14]通过设计具有良好自相关和互相关特性的序列（如Oppermann序列、完全互补序列），在保证通信扩频增益的同时实现雷达脉冲压缩。此外，基于索引调制的MAJoRCom方案[15]利用天线索引和子载波索引同时传输通信比特和雷达信息，在频谱效率上展现出优势。自适应虚拟波形设计方法[16]则通过优化波形参数在通信速率与雷达互信息之间实现灵活折衷。
+
+\textbf{波束赋形方面}，ISAC系统通常配备多天线阵列，通过设计发射预编码矩阵和接收合并矩阵来同时服务通信用户和感知目标。代表性的工作包括Liu等人[17]提出的CRB最小化波束赋形框架——在保证通信用户服务质量（QoS）约束下最小化目标方位角估计的CRB，揭示了通信与感知之间在空间自由度上的基本折衷关系。在毫米波频段，Kumari等人[18]提出了联合波形-波束赋形自适应设计方案，利用毫米波的大带宽和窄波束优势，实现了高速通信与高分辨率感知的有机结合。
+
+\textbf{性能指标与折衷方面}，ISAC系统的性能评估需要同时考虑通信和感知两个维度的指标。通信侧通常采用信道容量、可达速率、误符号率等信息论指标[3]；感知侧则采用均方误差（MSE）、Cram\'{e}r-Rao下界（CRB）、检测概率、雷达互信息等估计论和检测论指标[4]。值得注意的是，在大多数实际场景中，由于硬件资源和频谱资源的共享使用，通信与感知之间存在根本性的性能折衷（Performance Trade-off）[17]。揭示这一折衷边界并设计边界达成的传输策略，是ISAC理论研究的核心科学问题之一。
+
+\subsection{UAV辅助无线通信}
+
+UAV辅助无线通信的研究可大致分为静态部署优化和移动轨迹优化两类[5]。
+
+\textbf{静态部署优化}旨在寻找UAV在三维空间中的最优悬停位置，以最大化通信覆盖或容量。早期研究聚焦于单UAV场景，通过优化UAV的飞行高度来最大化地面覆盖半径[19,20]。He等人[21]进一步联合优化UAV高度和天线波束宽度，以提升多用户场景下的通信性能。为突破单UAV的覆盖瓶颈，多UAV部署策略被广泛研究。Mozaffari等人[22]提出了无人机小蜂窝的三维部署方案，分析了UAV高度、密度与覆盖概率之间的关系。Sun和Masouros[23]研究了面向覆盖最大化和功率效率的多UAV部署策略，通过优化UAV的拓扑结构实现服务质量的提升。Valiulahi和Masouros[24]进一步考虑了同信道干扰下的多UAV部署问题，提出了吞吐量最大化的优化框架。
+
+\textbf{移动轨迹优化}则充分利用UAV的机动性，使UAV在飞行过程中动态调整位置，从而获得比静态部署更优的信道条件和更高的通信性能。Zeng等人[25]首次系统性地研究了旋翼UAV的节能通信轨迹设计问题，在给定通信吞吐量要求下最小化UAV的总能耗，建立了推进能耗与飞行速度之间的解析模型。Jing等人[26]进一步考虑了UAV通信中的能量感知轨迹优化，在保证多用户通信公平性的前提下最大化UAV的能源效率。Hua等人[27]研究了UAV辅助无线传感器网络中的功率高效通信，通过优化UAV轨迹和传感器节点调度来降低系统总功耗。
+
+从信道建模的角度，空地信道通常以LoS链路为主导，自由空间路径损耗模型在多数场景下是合理的近似[5]。但在城市环境或存在障碍物的场景中，需采用概率LoS模型（如Rician衰落模型）以更准确地刻画信道特性。此外，UAV的移动性引入了多普勒频移和信道时变性，在某些高速飞行场景下需要通过鲁棒的信号处理技术加以应对。
+
+\subsection{UAV辅助目标感知与定位}
+
+UAV凭借其高空视角和可移动性，在目标感知与定位领域展现出独特优势。根据感知机理和优化方式，现有研究可从以下几个维度进行分类。
+
+\textbf{按测量体制分类}，UAV目标定位可采用不同的信号测量量：（1）到达时间（ToA）/到达距离（Range）测量，利用信号传播时延估计目标距离，至少需要3个非共线测量点确定二维位置，4个非共面测量点确定三维位置[28]；（2）到达角度（AoA）测量，利用天线阵列估计信号到达方向，最少需要2个UAV测量点通过三角交汇实现定位[29,30]；（3）到达时间差（TDoA）测量，利用不同接收点之间的信号到达时间差实现定位，无需目标与UAV之间的严格时间同步[8]；（4）接收信号强度（RSS）测量，利用信号功率的路径损耗模型进行距离估计，精度较低但实现简单。其中，ToA/距离测量因实现简单且精度与雷达测距体制天然一致，在UAV感知定位研究中被广泛采用。
+
+\textbf{按UAV配置分类}，可分为静态多UAV定位和移动单UAV定位两类。静态多UAV方案[28,31]通过部署至少3架UAV分别获取距离估计，进而交汇解算目标位置。这类方案的定位精度取决于UAV与目标的几何构型（几何精度因子，GDOP），通过优化UAV的部署位置可以使CRB最小化。移动单UAV方案[8,30]则利用UAV在不同位置的序贯测量来等效实现多站定位。He等人[8]研究了纯方位角测量下的单UAV目标定位，提出了渐近无偏的闭式定位解及相应的路径规划方案。Xu等人[29]将问题拓展至多UAV的分布式路径优化，在AoA测量体制下协同多个UAV的运动轨迹以提升定位精度。
+
+\textbf{按目标状态分类}，可分为静止目标定位[8]和移动目标跟踪[30]。对于移动目标跟踪，常采用扩展卡尔曼滤波（EKF）、无迹卡尔曼滤波（UKF）或粒子滤波等序贯估计方法，UAV的轨迹优化需兼顾当前估计精度的提升和对目标未来状态的预测不确定性降低。
+
+\subsection{UAV通感一体化研究现状}
+
+将ISAC技术应用于UAV平台是最新的研究方向，目前尚处于起步阶段，但发展迅速。根据是否利用UAV的机动性，现有工作可分为静态UAV-ISAC和移动UAV-ISAC两类。
+
+\textbf{静态UAV-ISAC}方面，Wang等人[31]考虑了多UAV DFRC网络中的功率分配问题，在已知目标位置的前提下，通过优化各UAV的发射功率最大化通信与感知的加权效用函数。该工作采用聚类方法确定UAV的部署位置，但未涉及UAV轨迹的优化。Zhang和Shen[32]考虑了UAV辅助的ISAC场景，其中UAV感知多个目标并将数据回传至地面基站，目标是最小化信息的峰值年龄（Peak Age of Information, PAoI），通过联合优化UAV轨迹、任务调度和功率分配来实现。
+
+\textbf{移动UAV-ISAC}方面，Meng等人[33]提出了周期性ISAC框架，在该框架中感知功能周期性触发而通信功能持续运行。作者通过优化感知时刻、UAV轨迹和波束赋形来最大化通信吞吐量，同时要求轨迹满足特定的感知波束图增益约束。Lyu等人[34]考虑了单UAV对多个通信用户和多个感知目标区域的联合服务问题，通过联合优化UAV轨迹和发射波束赋形来最大化用户通信吞吐量，同时满足感知波束图增益要求。上述两项工作的共同特点是：感知性能的评估指标为波束图增益（Beampattern Gain），而非直接反映目标估计精度的CRB或MSE。虽然波束图增益是有效的感知度量，但它无法精确刻画目标位置估计的误差水平[31,35]。
+
+此外，在能量模型方面，上述移动UAV-ISAC工作[33,34]仅考虑了与信号传输相关的能量消耗，忽略了UAV推进能耗（飞行与悬停能耗）。然而在实际中，UAV的推进能耗通常比通信传输能耗高出数个数量级，是UAV系统能量预算中的主导因素[25,26]，必须在轨迹设计问题中予以显式建模。
+
+\textbf{本文定位与区别}：与上述已有工作相比，本文工作的核心区别在于：（1）采用CRB直接作为感知性能的优化指标，而非间接的波束图增益，使轨迹设计直接面向目标定位精度的提升；（2）显式建模UAV推进能耗约束，使轨迹设计在实际可用的能量预算内具有物理可实现性；（3）提出多阶段序贯轨迹设计与目标估计框架，在目标位置先验未知的条件下，通过"轨迹设计—量测采集—位置更新"的闭环迭代，逐步逼近最优性能。
+
+为更清晰地展示本文工作与现有研究的区别，表\ref{tab:lit_comparison}从多个维度进行了对比。
+
+\begin{table}[htbp]
+\centering
+\caption{现有UAV-ISAC相关工作的对比}
+\label{tab:lit_comparison}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+\textbf{文献} & \textbf{UAV配置} & \textbf{UAV数量} & \textbf{优化变量} & \textbf{通信指标} & \textbf{感知指标} & \textbf{能量约束} \\
+\hline
+Wang等[31] & 静态 & 多UAV & 功率分配 & 通信速率 & 雷达互信息 & $\times$ \\
+\hline
+Zhang等[32] & 移动 & 单UAV & 轨迹+功率+调度 & PAoI & PAoI（间接） & $\times$ \\
+\hline
+Meng等[33] & 移动 & 单UAV & 轨迹+波束赋形 & 通信吞吐量 & 波束图增益 & $\times$ \\
+\hline
+Lyu等[34] & 移动 & 单UAV & 轨迹+波束赋形 & 通信吞吐量 & 波束图增益 & $\times$ \\
+\hline
+Jing等[35] & 移动 & 单UAV & 轨迹 & 通信速率 & CRB & $\surd$（推进能耗） \\
+\hline
+\textbf{本文工作} & \textbf{移动} & \textbf{单UAV} & \textbf{三维轨迹} & \textbf{通信速率} & \textbf{CRB（3D）} & $\surd$（推进能耗） \\
+\hline
+\end{tabular}
+\end{table}
+
+从表\ref{tab:lit_comparison}可以看出，本文工作是首个同时考虑以下要素的UAV-ISAC轨迹设计研究：（1）以CRB为直接感知优化指标；（2）显式包含UAV推进能耗约束；（3）多阶段序贯设计框架处理未知目标位置。此外，与已有的二维轨迹设计[35]相比，本文将问题拓展至三维空间，进一步释放了UAV的高度自由度，有望在通信与感知之间获得更优的折衷性能。
+
+\subsection{CRB在目标定位中的理论基础}
+
+由于后续章节将大量使用CRB作为感知性能的评估与优化指标，本节简要回顾CRB在目标定位问题中的理论基础。
+
+考虑未知确定性参数向量 $\bm{\theta}=[\theta_1,\ldots,\theta_D]^{\mathsf{T}}$ 的估计问题。设观测向量 $\mathbf{r}$ 的概率密度函数为 $p(\mathbf{r}|\bm{\theta})$。对于任意无偏估计器 $\hat{\bm{\theta}}$，其估计误差的协方差矩阵满足如下Cram\'{e}r-Rao不等式[36]：
+
+\begin{equation}
+\mathbb{E}\left[(\hat{\bm{\theta}}-\bm{\theta})(\hat{\bm{\theta}}-\bm{\theta})^{\mathsf{T}}\right]\succeq\mathbf{J}^{-1}(\bm{\theta})
+\label{eq:crb_general}
+\end{equation}
+
+其中 $\mathbf{J}(\bm{\theta})$ 为Fisher信息矩阵（Fisher Information Matrix, FIM），其第 $(i,j)$ 个元素定义为：
+
+\begin{equation}
+[\mathbf{J}(\bm{\theta})]_{ij}=-\mathbb{E}\left[\frac{\partial^2\ln p(\mathbf{r}|\bm{\theta})}{\partial\theta_i\partial\theta_j}\right]
+\label{eq:fim_definition}
+\end{equation}
+
+CRB即为FIM逆矩阵的对角线元素之和（或某个对角元），给出了无偏估计均方误差的理论下界：
+
+\begin{equation}
+\mathrm{CRB}_{\theta_i}=[\mathbf{J}^{-1}(\bm{\theta})]_{ii},\quad \mathbb{E}[(\hat{\theta}_i-\theta_i)^2]\geq\mathrm{CRB}_{\theta_i}
+\label{eq:crb_element}
+\end{equation}
+
+在目标定位问题中，参数向量通常为目标的空间坐标（二维或三维）。CRB的大小取决于两个关键因素：（1）\textbf{测量噪声水平}——噪声越大，CRB越大，估计越不准确；（2）\textbf{传感器-目标几何构型}——传感器相对于目标的空间分布直接决定FIM的特征结构，进而影响CRB。几何精度因子（Geometric Dilution of Precision, GDOP）正是对这一几何效应的量化[36]。当传感器在角度域均匀环绕目标分布时，GDOP最小，CRB达到最低；当传感器集中在某一方向时，垂直于该方向的定位精度严重退化。
+
+对于UAV轨迹设计问题，上述CRB的几何依赖性具有直接的设计指导意义：\textbf{优化UAV悬停点（传感器位置）的空间分布，本质上就是在优化FIM的特征结构，从而最小化CRB}。这正是本文选择CRB作为感知性能指标的核心动机——CRB不仅是一个估计精度的理论下界，更重要的是，它是一个关于传感器几何构型的可优化函数，适合嵌入轨迹优化问题的目标函数中。
+
+值得注意的是，CRB作为优化目标在实际应用中面临一个"先有鸡还是先有蛋"的困境：CRB依赖于目标真实位置 $\bm{\theta}$，而目标位置本身是待估计的未知量。这正是本文提出多阶段方法的根本原因——用当前阶段的目标位置估计值代替真实值计算CRB的近似值，在序贯迭代中逐步逼近真实的最优轨迹。
+
+\section{本文主要研究内容与贡献}
+
+针对上述UAV-ISAC轨迹设计中的研究空白，本文的主要研究内容和贡献可概括为以下几个方面：
+
+（1）\textbf{三维UAV-ISAC系统建模}：建立了包含三维UAV轨迹、空地通信、雷达测距和推进能耗的完整系统模型。推导了基于ToA距离量测的三维目标定位CRB解析表达式，将其作为感知性能的直接优化指标。
+
+（2）\textbf{通信感知折衷轨迹优化问题建模与求解}：将UAV轨迹设计问题建模为通信速率与感知CRB的加权多目标优化问题，通过权衡因子实现C\&S性能的灵活折衷。针对问题的非凸性，综合运用逐次凸逼近（SCA）、一阶泰勒展开和线搜索等技术，设计了迭代求解算法以获得局部最优解。
+
+（3）\textbf{多阶段序贯轨迹设计与目标定位框架}：针对目标位置先验未知的实际挑战，提出了多阶段闭环迭代框架。每个阶段利用当前最优目标估计设计轨迹、采集量测、更新估计，目标定位精度随阶段推进逐步提升。基于MLE和EKF两类估计器分别实现了批量式（渐近最优）和递推式（计算量恒定）的目标定位方案。
+
+（4）\textbf{完备的数值仿真与性能分析}：通过数值仿真全面评估了所提方案在不同能量预算、权衡因子、阶段划分策略下的C\&S性能。揭示了CRB优化相比于通信仅优化和固定路径的巨大优势，及UAV能量约束和权衡因子对系统性能的显著影响。
+
+\section{论文组织结构}
+
+本文共分为五章，各章内容安排如下：
+
+\textbf{第一章（本章）}为绪论：介绍研究背景与意义，综述国内外在通感一体化技术、UAV辅助通信与感知、UAV通感一体化交叉领域以及CRB定位理论方面的研究现状，明确本文的研究动机与定位，概述主要贡献与论文结构。
+
+\textbf{第二章}为系统模型：建立UAV-ISAC系统的数学模型，包括UAV三维轨迹模型、空地通信模型、ToA测距感知模型、CRB推导和UAV推进能耗模型，为后续章节提供统一的理论框架。
+
+\textbf{第三章}为问题建模与轨迹优化：详细阐述从原始非凸问题到可求解凸问题的转化过程，包括单阶段优化问题P2$(m)$的建模、基于SCA的非凸约束和目标函数的凸化技术、线搜索与迭代求解机制，以及多阶段扩展框架的完整算法流程。
+
+\textbf{第四章}为目标定位方法：介绍基于MLE和EKF的两类目标三维位置估计方法，包括两级网格搜索策略、参考点守卫机制、粗扫描初始定位，以及两种估计方法的理论对比与适用场景分析。
+
+\textbf{第五章}为总结与展望：对全文工作进行总结，并展望未来研究方向。
+
+% ======================================================================
+\newpage
+\section*{参考文献}
+\addcontentsline{toc}{section}{参考文献}
+
+\noindent
+[1]\quad Liu A, Huang Z, Li M, et al. A survey on fundamental limits of integrated sensing and communication[J]. IEEE Communications Surveys \& Tutorials, 2022, 24(2): 954-1020.
+
+\noindent
+[2]\quad Cui Y, Liu F, Jing X, et al. Integrating sensing and communications for ubiquitous IoT: Applications, trends, and challenges[J]. IEEE Network, 2021, 35(5): 158-167.
+
+\noindent
+[3]\quad Liu F, Masouros C, Petropulu A P, et al. Joint radar and communication design: Applications, state-of-the-art, and the road ahead[J]. IEEE Transactions on Communications, 2020, 68(6): 3834-3862.
+
+\noindent
+[4]\quad Liu F, Cui Y, Masouros C, et al. Integrated sensing and communications: Towards dual-functional wireless networks for 6G and beyond[J]. IEEE Journal on Selected Areas in Communications, 2022, 40(6): 1728-1767.
+
+\noindent
+[5]\quad Zeng Y, Wu Q, Zhang R. Accessing from the sky: A tutorial on UAV communications for 5G and beyond[J]. Proceedings of the IEEE, 2019, 107(12): 2327-2375.
+
+\noindent
+[6]\quad Mozaffari M, Saad W, Bennis M, et al. A tutorial on UAVs for wireless networks: Applications, challenges, and open problems[J]. IEEE Communications Surveys \& Tutorials, 2019, 21(3): 2334-2360.
+
+\noindent
+[7]\quad Zeng Y, Zhang R, Lim T J. Wireless communications with unmanned aerial vehicles: Opportunities and challenges[J]. IEEE Communications Magazine, 2016, 54(5): 36-42.
+
+\noindent
+[8]\quad He L, Gong P, Zhang X, et al. The bearing-only target localization via the single UAV: Asymptotically unbiased closed-form solution and path planning[J]. IEEE Access, 2019, 7: 153592-153604.
+
+\noindent
+[9]\quad Wu Q, Xu J, Zeng Y, et al. A comprehensive overview on 5G-and-beyond networks with UAVs: From communications to sensing and intelligence[J]. IEEE Journal on Selected Areas in Communications, 2021, 39(10): 2912-2945.
+
+\noindent
+[10]\quad Akan O B, Arik M. Internet of radars: Sensing versus sending with joint radar-communications[J]. IEEE Communications Magazine, 2020, 58(9): 13-19.
+
+\noindent
+[11]\quad Liu F, Yuan W, Masouros C, et al. Radar-assisted predictive beamforming for vehicular links: Communication served by sensing[J]. IEEE Transactions on Wireless Communications, 2020, 19(11): 7704-7719.
+
+\noindent
+[12]\quad Liu Y, Liao G, Xu J, et al. Adaptive OFDM integrated radar and communications waveform design based on information theory[J]. IEEE Communications Letters, 2017, 21(10): 2174-2177.
+
+\noindent
+[13]\quad Jamil M, Zepernick H, Pettersson M I. On integrated radar and communication systems using Oppermann sequences[C]//IEEE Military Communications Conference (MILCOM), San Diego, CA, USA, 2008: 1-6.
+
+\noindent
+[14]\quad Li X, Yang R, Zhang Z, et al. Research of constructing method of complete complementary sequence in integrated radar and communication[C]//IEEE International Conference on Signal Processing (ICSP), Beijing, China, 2012: 1729-1732.
+
+\noindent
+[15]\quad Huang T, Shlezinger N, Xu X, et al. MAJoRCom: A dual-function radar communication system using index modulation[J]. IEEE Transactions on Signal Processing, 2020, 68: 3423-3438.
+
+\noindent
+[16]\quad Kumari P, Vorobyov S A, Heath R W. Adaptive virtual waveform design for millimeter-wave joint communication--radar[J]. IEEE Transactions on Signal Processing, 2020, 68: 715-730.
+
+\noindent
+[17]\quad Liu F, Liu Y, Li A, et al. Cram\'{e}r-Rao bound optimization for joint radar-communication beamforming[J]. IEEE Transactions on Signal Processing, 2022, 70: 240-253.
+
+\noindent
+[18]\quad Kumari P, Myers N J, Heath R W. Adaptive and fast combined waveform-beamforming design for mmWave automotive joint communication-radar[J]. IEEE Journal of Selected Topics in Signal Processing, 2021, 15(4): 996-1012.
+
+\noindent
+[19]\quad Al-Hourani A, Kandeepan S, Lardner S. Optimal LAP altitude for maximum coverage[J]. IEEE Wireless Communications Letters, 2014, 3(6): 569-572.
+
+\noindent
+[20]\quad Li B, Chen C, Zhang R, et al. The energy-efficient UAV-based BS coverage in air-to-ground communications[C]//IEEE Sensor Array and Multichannel Signal Processing Workshop (SAM), Sheffield, UK, 2018: 578-581.
+
+\noindent
+[21]\quad He H, Zhang S, Zeng Y, et al. Joint altitude and beamwidth optimization for UAV-enabled multiuser communications[J]. IEEE Communications Letters, 2018, 22(2): 344-347.
+
+\noindent
+[22]\quad Mozaffari M, Saad W, Bennis M, et al. Drone small cells in the clouds: Design, deployment and performance analysis[C]//IEEE Global Communications Conference (GLOBECOM), San Diego, CA, USA, 2015: 1-6.
+
+\noindent
+[23]\quad Sun J, Masouros C. Deployment strategies of multiple aerial BSs for user coverage and power efficiency maximization[J]. IEEE Transactions on Communications, 2019, 67(4): 2981-2994.
+
+\noindent
+[24]\quad Valiulahi I, Masouros C. Multi-UAV deployment for throughput maximization in the presence of co-channel interference[J]. IEEE Internet of Things Journal, 2021, 8(5): 3605-3618.
+
+\noindent
+[25]\quad Zeng Y, Zhang R. Energy-efficient UAV communication with trajectory optimization[J]. IEEE Transactions on Wireless Communications, 2017, 16(6): 3747-3760.
+
+\noindent
+[26]\quad Jing X, Sun J, Masouros C. Energy aware trajectory optimization for aerial base stations[J]. IEEE Transactions on Communications, 2021, 69(5): 3352-3366.
+
+\noindent
+[27]\quad Hua M, Wang Y, Zhang Z, et al. Power-efficient communication in UAV-aided wireless sensor networks[J]. IEEE Communications Letters, 2018, 22(6): 1264-1267.
+
+\noindent
+[28]\quad Ji Y, Dong C, Zhu X, et al. Fair-energy trajectory planning for cooperative UAVs to locate multiple targets[C]//IEEE International Conference on Communications (ICC), Shanghai, China, 2019: 1-7.
+
+\noindent
+[29]\quad Xu S, Do\u{g}an\c{c}ay K, Hmam H. Distributed path optimization of multiple UAVs for AOA target localization[C]//IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), Shanghai, China, 2016: 3141-3145.
+
+\noindent
+[30]\quad Do\u{g}an\c{c}ay K. Single- and multi-platform constrained sensor path optimization for angle-of-arrival target tracking[C]//European Signal Processing Conference (EUSIPCO), Aalborg, Denmark, 2010: 835-839.
+
+\noindent
+[31]\quad Wang X, Fei Z, Zhang J A, et al. Constrained utility maximization in dual-functional radar-communication multi-UAV networks[J]. IEEE Transactions on Communications, 2021, 69(4): 2660-2672.
+
+\noindent
+[32]\quad Zhang K, Shen C. UAV aided integrated sensing and communications[C]//IEEE Vehicular Technology Conference (VTC2021-Fall), Norman, OK, USA, 2021: 1-6.
+
+\noindent
+[33]\quad Meng K, Wu Q, Ma S, et al. UAV trajectory and beamforming optimization for integrated periodic sensing and communication[J]. IEEE Wireless Communications Letters, 2022, 11(6): 1211-1215.
+
+\noindent
+[34]\quad Lyu Z, Zhu G, Xu J. Joint maneuver and beamforming design for UAV-enabled integrated sensing and communication[J/OL]. arXiv preprint, 2021, arXiv:2110.02857.
+
+\noindent
+[35]\quad Jing X, Liu F, Masouros C. UAV path design for joint radar and communications under energy constraints[C]//IEEE Global Communications Conference (GLOBECOM), Rio de Janeiro, Brazil, 2022: 1-6.
+
+\noindent
+[36]\quad Kay S M. Fundamentals of statistical signal processing: Estimation theory[M]. Upper Saddle River, NJ: Prentice Hall, 1993.

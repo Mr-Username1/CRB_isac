@@ -6,25 +6,25 @@ with small diagonal process noise Q for numerical stability.
 
 For each new scalar range z_k at known UAV position u_k = [x_k^u, y_k^u, z_k^u]^T:
 
-  Prediction (static):
-      x_{k|k-1} = x_{k-1|k-1}
-      P_{k|k-1} = P_{k-1|k-1} + Q
+Prediction (static):
+    x_{k|k-1} = x_{k-1|k-1}
+    P_{k|k-1} = P_{k-1|k-1} + Q
 
-  Predicted measurement (evaluated at x_{k|k-1}):
-      d_s = sqrt(||u_k - x_{k|k-1}||^2)
-      h(x_{k|k-1}) = d_s
+Predicted measurement (evaluated at x_{k|k-1}):
+    d_s = sqrt(||u_k - x_{k|k-1}||^2)
+    h(x_{k|k-1}) = d_s
 
-  Jacobian (1 x 3), evaluated at x_{k|k-1}:
-      H_k = [ -(x_k^u - x) / d_s ,  -(y_k^u - y) / d_s ,  -(z_k^u - z) / d_s ]
+Jacobian (1 x 3), evaluated at x_{k|k-1}:
+    H_k = [ -(x_k^u - x) / d_s ,  -(y_k^u - y) / d_s ,  -(z_k^u - z) / d_s ]
 
-  Measurement variance (heteroskedastic, same structure as simulation / MLE):
-      g = beta0_est / d_s^4 ,   R_k = max( a * sigma0^2 / (P_w * Gp * g) , eps )
+Measurement variance (heteroskedastic, same structure as simulation / MLE):
+    g = beta0_est / d_s^4 ,   R_k = max( a * sigma0^2 / (P_w * Gp * g) , eps )
 
-  Kalman update (Joseph covariance for stability):
-      S_k = H_k P_{k|k-1} H_k^T + R_k
-      K_k = P_{k|k-1} H_k^T S_k^{-1}
-      x_{k|k} = x_{k|k-1} + K_k ( z_k - h(x_{k|k-1}) )
-      P_{k|k} = (I - K_k H_k) P_{k|k-1} (I - K_k H_k)^T + K_k R_k K_k^T
+Kalman update (Joseph covariance for stability):
+    S_k = H_k P_{k|k-1} H_k^T + R_k
+    K_k = P_{k|k-1} H_k^T S_k^{-1}
+    x_{k|k} = x_{k|k-1} + K_k ( z_k - h(x_{k|k-1}) )
+    P_{k|k} = (I - K_k H_k) P_{k|k-1} (I - K_k H_k)^T + K_k R_k K_k^T
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ import numpy as np
 import system_model as sm
 
 
-def default_prior_variance(cfg: sm.SimConfig, frac_xy: float = 0.32, frac_z: float = 0.50) -> np.ndarray:
+def default_prior_variance(cfg: sm.SimConfig, frac_xy: float = 0.33, frac_z: float = 0.50) -> np.ndarray:
     """
     Per-axis prior variance [sigma_x^2, sigma_y^2, sigma_z^2] for initial diagonal P0.
     Z-direction prior based on target height range, not map size.
@@ -61,7 +61,7 @@ class StaticRangeEKF3D:
     Uses the same H_est / beta0_est as ``mle_grid_search`` for R_k (estimator-side).
     """
 
-    def __init__(self, cfg: sm.SimConfig, prior_frac_xy: float = 0.32, prior_frac_z: float = 0.50) -> None:
+    def __init__(self, cfg: sm.SimConfig, prior_frac_xy: float = 0.33, prior_frac_z: float = 0.50) -> None:
         self.cfg = cfg
         self.prior_frac_xy = float(prior_frac_xy)
         self.prior_frac_z = float(prior_frac_z)

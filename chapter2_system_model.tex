@@ -1,0 +1,484 @@
+\chapter{系统模型}
+
+本章建立无人机（UAV）辅助的通信感知一体化（ISAC）系统模型。系统由一个旋翼无人机、一个地面通信用户和一个待定位的地面静止目标组成。无人机从基站位置 $\mathbf{s}_0=(x_B, y_B, 0)$ 起飞，沿三维轨迹飞行，在飞行过程中与地面用户保持通信，同时在悬停点对目标进行测距感知。下面分别介绍 UAV 轨迹模型、通信模型、感知测距模型、CRB（Cram\'{e}r-Rao Bound）推导以及 UAV 推进能耗模型。
+
+\section{UAV 轨迹模型}
+
+考虑旋翼无人机沿离散化三维轨迹 $\{\mathbf{s}[n]\}_{n=1}^{N}$ 飞行，其中 $\mathbf{s}[n]=(x[n], y[n], z[n])\in\mathbb{R}^3$ 表示第 $n$ 个航点（waypoint）的三维坐标，$N$ 为航点总数。令 $T_f$ 表示无人机在两个连续航点之间的飞行时长。无人机的飞行速度定义为航点位置的时间差分：
+
+\begin{equation}
+\mathbf{v}[n]=\begin{cases}
+\dfrac{\mathbf{s}[1]-\mathbf{s}_0}{T_f}, & n=1 \\[10pt]
+\dfrac{\mathbf{s}[n]-\mathbf{s}[n-1]}{T_f}, & n=2,\ldots,N
+\end{cases}
+\label{eq:velocity}
+\end{equation}
+
+其中 $\mathbf{s}_0=(x_B, y_B, 0)$ 为无人机起始位置（基站处），$\mathbf{v}[n]=(v_x[n], v_y[n], v_z[n])$ 为第 $n$ 个航点处的速度矢量。
+
+为实现对目标的距离感知，无人机并非在每个航点都进行测量，而是每隔 $\mu$ 个航点悬停一次，在悬停期间发射感知信号并接收目标回波。悬停点集合定义为：
+
+\begin{equation}
+\mathcal{H}=\bigl\{\mathbf{h}[k]\bigr\}_{k=1}^{K}=\bigl\{\mathbf{s}[k\mu]\bigr\}_{k=1}^{K},\quad K=\left\lfloor\frac{N}{\mu}\right\rfloor
+\label{eq:hover_points}
+\end{equation}
+
+其中 $\mathbf{h}[k]=(x_h[k], y_h[k], z_h[k])$ 为第 $k$ 个悬停点的三维坐标，$K$ 为悬停点总数。在每个悬停点处，无人机悬停持续时长 $T_h$，用于发射感知波形并采集目标的距离测量值。上述轨迹模型对应于 \texttt{system\_model.py} 中的 \texttt{compute\_velocities} 与 \texttt{extract\_hover\_points} 函数。
+
+\section{通信模型}
+
+无人机在执行感知任务的同时，保持与地面通信用户的下行数据传输。地面用户位于 $\mathbf{u}=(x_u, y_u, 0)$。无人机在第 $n$ 个航点到地面用户的三维斜距为：
+
+\begin{equation}
+d_c[n]=\sqrt{\bigl(x[n]-x_u\bigr)^2+\bigl(y[n]-y_u\bigr)^2+z[n]^2}
+\label{eq:dc_distance}
+\end{equation}
+
+假设空地信道为视距（LoS）链路，信道功率增益服从自由空间路径损耗模型：
+
+\begin{equation}
+h[n]=\frac{\alpha_0}{d_c^2[n]}
+\label{eq:channel_gain_comm}
+\end{equation}
+
+其中 $\alpha_0$ 为参考距离 $1\text{m}$ 处的信道功率增益。接收端的信噪比（SNR）为：
+
+\begin{equation}
+\gamma_c[n]=\frac{P\cdot h[n]}{\sigma_0^2}
+\label{eq:snr_comm}
+\end{equation}
+
+其中 $P$ 为无人机发射功率，$\sigma_0^2=N_0B$ 为噪声功率，$N_0$ 为噪声功率谱密度，$B$ 为系统带宽。根据香农公式，第 $n$ 个航点处的可达通信速率为：
+
+\begin{equation}
+R[n]=B\log_2\!\bigl(1+\gamma_c[n]\bigr)
+\label{eq:rate_per_waypoint}
+\end{equation}
+
+无人机在整个轨迹上的平均通信速率为：
+
+\begin{equation}
+\bar{R}=\frac{1}{N}\sum_{n=1}^{N}R[n]
+\label{eq:average_rate}
+\end{equation}
+
+以上通信模型对应 \texttt{system\_model.py} 中的 \texttt{dc\_uav\_to\_user}、\texttt{channel\_gain\_comm} 和 \texttt{rate\_per\_waypoint} 函数。
+
+\section{感知测距模型}
+
+\subsection{测距观测模型}
+
+设目标位于三维位置 $\mathbf{t}=(x_t, y_t, z_t)$。无人机在第 $k$ 个悬停点处发射感知信号，经目标反射后接收回波，通过估计信号往返时延（ToA）获取距离测量值。悬停点到目标的三维斜距为：
+
+\begin{equation}
+d_s[k]=\|\mathbf{h}[k]-\mathbf{t}\|=\sqrt{\bigl(x_h[k]-x_t\bigr)^2+\bigl(y_h[k]-y_t\bigr)^2+\bigl(z_h[k]-z_t\bigr)^2}
+\label{eq:ds_distance}
+\end{equation}
+
+第 $k$ 次距离测量模型为：
+
+\begin{equation}
+r[k]=d_s[k]+w[k]
+\label{eq:measurement_model}
+\end{equation}
+
+其中 $w[k]\sim\mathcal{N}(0,\sigma^2[k])$ 为加性高斯测量噪声，其方差取决于感知链路的瞬时信道条件。
+
+\subsection{感知信道与测量噪声}
+
+感知链路涉及信号从 UAV 到目标再返回 UAV 的双程（round-trip）传播。因此，感知信道功率增益服从路径损耗指数为 $4$ 的模型：
+
+\begin{equation}
+g[k]=\frac{\beta_0}{d_s^4[k]}
+\label{eq:channel_gain_sensing}
+\end{equation}
+
+其中 $\beta_0$ 为感知链路在参考距离 $1\text{m}$ 处的信道功率增益。
+
+UAV 接收端经处理增益 $G_p$（如脉冲压缩、相干积累等）后的回波信号功率为：
+
+\begin{equation}
+P_r[k]=P\cdot G_p\cdot g[k]=\frac{P\cdot G_p\cdot\beta_0}{d_s^4[k]}
+\label{eq:received_power}
+\end{equation}
+
+对应的感知信噪比为：
+
+\begin{equation}
+\gamma_s[k]=\frac{P_r[k]}{\sigma_0^2}=\frac{P\cdot G_p\cdot g[k]}{\sigma_0^2}
+\label{eq:sensing_snr}
+\end{equation}
+
+对于基于 ToA 估计的测距系统，测距误差的克拉美罗下界与感知 SNR 成反比。采用简化的方差模型，第 $k$ 次测量噪声方差可表示为\cite{Rangzenegger2020}：
+
+\begin{equation}
+\sigma^2[k]=\frac{a}{\gamma_s[k]}=\frac{a\cdot\sigma_0^2}{P\cdot G_p\cdot g[k]}
+\label{eq:measurement_variance}
+\end{equation}
+
+其中 $a>0$ 为系统相关缩放因子，综合了信号波形、有效带宽及接收机实现损耗等因素。
+
+将式 (\ref{eq:channel_gain_sensing}) 代入式 (\ref{eq:measurement_variance})，得到测量方差关于距离的显式表达：
+
+\begin{equation}
+\sigma^2[k]=\frac{a\cdot\sigma_0^2}{P\cdot G_p\cdot\beta_0}\cdot d_s^4[k]
+\label{eq:variance_distance}
+\end{equation}
+
+式 (\ref{eq:variance_distance}) 表明，测量噪声方差随距离的四次方增长，远距离目标的位置估计精度显著恶化。上述感知测距模型对应 \texttt{system\_model.py} 中的 \texttt{ds\_uav\_to\_target}、\texttt{channel\_gain\_sensing}、\texttt{sensing\_snr} 与 \texttt{sigma2\_measurement\_from\_g} 函数。
+
+\section{CRB 推导}
+
+CRB 为任意无偏估计量的均方误差提供了一个下界，是衡量目标定位精度的核心指标。本节从 $K$ 次独立距离测量出发，推导目标三维位置 $\bm{\theta}=(x_t, y_t, z_t)^{\mathsf{T}}$ 的 Fisher 信息矩阵（FIM）及对应的 CRB。
+
+\subsection{对数似然函数}
+
+给定 $K$ 次独立高斯测量 $\mathbf{r}=[r[1],\ldots,r[K]]^{\mathsf{T}}$，对数似然函数为（省略常数项）：
+
+\begin{equation}
+\ln p(\mathbf{r}\mid\bm{\theta})=-\frac{1}{2}\sum_{k=1}^{K}\Bigl[\ln\sigma^2[k]+\frac{\bigl(r[k]-d_s[k]\bigr)^2}{\sigma^2[k]}\Bigr]
+\label{eq:log_likelihood}
+\end{equation}
+
+注意，此处不仅测量均值 $d_s[k]$ 依赖于 $\bm{\theta}$，方差 $\sigma^2[k]$ 也通过 $d_s[k]$ 间接依赖于 $\bm{\theta}$。因此，FIM 需同时考虑均值和方差对参数的依赖。
+
+\subsection{Fisher 信息矩阵}
+
+对于单次测量 $r[k]\sim\mathcal{N}\bigl(d_s[k],\sigma^2[k]\bigr)$，FIM 的第 $(i,j)$ 元素为\cite{Kay1993}：
+
+\begin{equation}
+[\mathbf{F}_k]_{ij}=\frac{1}{\sigma^2[k]}\frac{\partial d_s[k]}{\partial\theta_i}\frac{\partial d_s[k]}{\partial\theta_j}
++\frac{1}{2\sigma^4[k]}\frac{\partial\sigma^2[k]}{\partial\theta_i}\frac{\partial\sigma^2[k]}{\partial\theta_j}
+\label{eq:fim_element}
+\end{equation}
+
+首先计算均值梯度。定义差向量 $\bm{\Delta}[k]=\mathbf{h}[k]-\bm{\theta}=(\Delta x[k],\Delta y[k],\Delta z[k])^{\mathsf{T}}$，有：
+
+\begin{equation}
+\frac{\partial d_s[k]}{\partial\bm{\theta}}=-\frac{\bm{\Delta}[k]}{d_s[k]}
+\label{eq:grad_distance}
+\end{equation}
+
+由式 (\ref{eq:variance_distance})，$\sigma^2[k]\propto d_s^4[k]$，故方差梯度为：
+
+\begin{equation}
+\frac{\partial\sigma^2[k]}{\partial\bm{\theta}}=\frac{4\sigma^2[k]}{d_s[k]}\cdot\frac{\partial d_s[k]}{\partial\bm{\theta}}
+=-\frac{4\sigma^2[k]\cdot\bm{\Delta}[k]}{d_s^2[k]}
+\label{eq:grad_variance}
+\end{equation}
+
+\subsection{权重与 FIM 显式形式}
+
+将式 (\ref{eq:grad_distance}) 与 (\ref{eq:grad_variance}) 代入式 (\ref{eq:fim_element})，得到第 $k$ 次测量对 FIM 的贡献：
+
+\begin{align}
+[\mathbf{F}_k]_{ij}&=\frac{1}{\sigma^2[k]}\cdot\frac{\Delta_i[k]\Delta_j[k]}{d_s^2[k]}
++\frac{1}{2\sigma^4[k]}\cdot\frac{16\sigma^4[k]\cdot\Delta_i[k]\Delta_j[k]}{d_s^4[k]}\nonumber\\
+&=\left[\frac{1}{\sigma^2[k]\,d_s^2[k]}+\frac{8}{d_s^4[k]}\right]\Delta_i[k]\Delta_j[k]
+\label{eq:fim_k_element}
+\end{align}
+
+定义中间变量：
+
+\begin{equation}
+c_1\triangleq\frac{P\cdot G_p\cdot\beta_0}{a\cdot\sigma_0^2}
+\label{eq:c1_definition}
+\end{equation}
+
+利用式 (\ref{eq:measurement_variance}) 和 (\ref{eq:channel_gain_sensing}) 化简均值项系数：
+
+\begin{equation}
+\frac{1}{\sigma^2[k]\,d_s^2[k]}=\frac{P\cdot G_p\cdot g[k]}{a\cdot\sigma_0^2\cdot d_s^2[k]}
+=\frac{P\cdot G_p\cdot\beta_0}{a\cdot\sigma_0^2\cdot d_s^6[k]}=\frac{c_1}{d_s^6[k]}
+\label{eq:mean_weight}
+\end{equation}
+
+定义第 $k$ 次测量的权重因子：
+
+\begin{equation}
+w_k\triangleq\frac{c_1}{d_s^6[k]}+\frac{8}{d_s^4[k]}
+\label{eq:weight_k}
+\end{equation}
+
+$K$ 次独立测量的总体 FIM 为各次贡献之和：
+
+\begin{equation}
+\mathbf{F}(\bm{\theta})=\sum_{k=1}^{K}w_k\cdot\bm{\Delta}[k]\bm{\Delta}[k]^{\mathsf{T}}
+\label{eq:fim_total}
+\end{equation}
+
+展开为 $3\times 3$ 矩阵形式：
+
+\begin{equation}
+\mathbf{F}(\bm{\theta})=\sum_{k=1}^{K} w_k
+\begin{bmatrix}
+\Delta x^2[k] & \Delta x[k]\Delta y[k] & \Delta x[k]\Delta z[k] \\[3pt]
+\Delta y[k]\Delta x[k] & \Delta y^2[k] & \Delta y[k]\Delta z[k] \\[3pt]
+\Delta z[k]\Delta x[k] & \Delta z[k]\Delta y[k] & \Delta z^2[k]
+\end{bmatrix}
+\label{eq:fim_matrix}
+\end{equation}
+
+\subsection{CRB 指标}
+
+目标位置估计的 CRB 为 FIM 的逆矩阵：
+
+\begin{equation}
+\mathbf{C}(\bm{\theta})=\mathbf{F}^{-1}(\bm{\theta})
+\label{eq:crb_matrix}
+\end{equation}
+
+矩阵 $\mathbf{C}(\bm{\theta})$ 的对角元素 $\mathbf{C}_{11}$、$\mathbf{C}_{22}$、$\mathbf{C}_{33}$ 分别给出了 $x_t$、$y_t$、$z_t$ 估计的克拉美罗下界。为综合衡量三维定位精度，定义 CRB 指标为 FIM 逆矩阵的迹：
+
+\begin{equation}
+\mathrm{CRB}_{\mathrm{xyz}}(\bm{\theta})\triangleq\mathrm{tr}\bigl(\mathbf{F}^{-1}(\bm{\theta})\bigr)=\mathbf{C}_{11}+\mathbf{C}_{22}+\mathbf{C}_{33}
+\label{eq:crb_xyz}
+\end{equation}
+
+$\mathrm{CRB}_{\mathrm{xyz}}$ 越小，目标位置的可估计性越好。在本系统的轨迹优化问题中，式 (\ref{eq:crb_xyz}) 将作为感知性能的核心评价指标。实际计算时，在 FIM 上附加 $\epsilon\mathbf{I}$（$\epsilon=10^{-6}$）以保证数值稳定性。上述 CRB 推导对应 \texttt{system\_model.py} 中的 \texttt{crb\_xyz\_sum} 函数。
+
+\subsection{几何解释与讨论}
+
+式 (\ref{eq:weight_k}) 中的权重由两项构成：第一项 $c_1/d_s^6[k]$ 源于测量均值对参数的依赖（经典 FIM 项），第二项 $8/d_s^4[k]$ 源于测量方差对参数的依赖。从量级上看，当 $d_s[k]$ 较小时，$d_s^{-6}$ 项占主导；当 $d_s[k]$ 较大时，$d_s^{-4}$ 项权重相对增大。这意味着近距离悬停点对 CRB 的贡献更为显著，因此优化悬停点位置以形成良好的距离几何构型是降低 CRB 的关键。
+
+为从几何角度理解 CRB，可将 FIM 用单位方向向量表示。令 $\mathbf{u}_k\triangleq\bm{\Delta}[k]/d_s[k]=(\cos\phi_k\cos\theta_k,\;\cos\phi_k\sin\theta_k,\;\sin\phi_k)^{\mathsf{T}}$ 为从目标指向第 $k$ 个悬停点的单位向量，其中 $\theta_k$ 和 $\phi_k$ 分别为方位角和仰角，则：
+
+\begin{equation}
+\mathbf{F}(\bm{\theta})=\sum_{k=1}^{K}\tilde{w}_k\cdot\mathbf{u}_k\mathbf{u}_k^{\mathsf{T}},\quad
+\tilde{w}_k\triangleq\frac{c_1}{d_s^4[k]}+\frac{8}{d_s^2[k]}
+\label{eq:fim_angular}
+\end{equation}
+
+其中 $\tilde{w}_k=w_k\cdot d_s^2[k]$ 为归一化权重。式 (\ref{eq:fim_angular}) 表明，FIM 是 $K$ 个单位方向外积矩阵的加权和；CRB 的大小取决于悬停点相对于目标的角度分布（$\{\theta_k,\phi_k\}$）以及距离分布（$d_s[k]$）。分散的角度覆盖和较小的感知距离均有利于降低 CRB，提升定位精度。
+
+\section{UAV 推进能耗模型}
+
+旋翼无人机的推进功耗是轨迹设计的关键约束。采用经典的旋翼无人机推进功耗模型\cite{Zeng2016}，飞行速度为 $v=\|\mathbf{v}\|$ 时的推进功率由三部分构成：
+
+\begin{align}
+P_{\mathrm{prop}}(v)&=\underbrace{P_0\!\left(1+\frac{3v^2}{U_{\mathrm{tip}}^2}\right)}_{\text{叶片剖面功率（blade profile）}}
++\underbrace{P_I\!\left(\sqrt{\sqrt{1+\frac{v^4}{4v_0^4}}-\frac{v^2}{2v_0^2}}\right)}_{\text{诱导功率（induced）}}\nonumber\\
+&\quad+\underbrace{\frac{1}{2}D_0\,\rho\, s\, A\, v^3}_{\text{寄生功率（parasite）}}
+\label{eq:propulsion_power}
+\end{align}
+
+其中各参数含义及典型值见表~\ref{tab:energy_params}。
+
+\begin{table}[htbp]
+\centering
+\caption{旋翼无人机推进功耗模型参数}
+\label{tab:energy_params}
+\begin{tabular}{ccl}
+\hline
+\textbf{符号} & \textbf{取值} & \textbf{含义} \\
+\hline
+$P_0$     & $80.0\;\text{W}$  & 悬停状态叶片剖面功率 \\
+$P_I$     & $88.6\;\text{W}$  & 悬停状态诱导功率 \\
+$U_{\mathrm{tip}}$ & $120.0\;\text{m/s}$ & 旋翼桨尖速度 \\
+$v_0$     & $4.03\;\text{m/s}$ & 悬停状态平均旋翼诱导速度 \\
+$D_0$     & $0.6$ & 机身阻力比 \\
+$\rho$    & $1.225\;\text{kg/m}^3$ & 空气密度 \\
+$s$       & $0.05$ & 旋翼实度 \\
+$A$       & $0.503\;\text{m}^2$ & 旋翼盘面积 \\
+\hline
+\end{tabular}
+\end{table}
+
+无人机在整个任务中的总推进能耗包括飞行段能耗和悬停段能耗两部分。令 $V[n]=\|\mathbf{v}[n]\|$ 为第 $n$ 个航点处的飞行速率，总能耗为：
+
+\begin{equation}
+E_{\mathrm{total}}=\underbrace{T_f\sum_{n=1}^{N}P_{\mathrm{prop}}\bigl(V[n]\bigr)}_{\text{飞行能耗}}+\underbrace{T_h\cdot K\cdot P_{\mathrm{prop}}(0)}_{\text{悬停能耗}}
+\label{eq:total_energy}
+\end{equation}
+
+其中 $P_{\mathrm{prop}}(0)=P_0+P_I$ 为悬停功率（$v=0$ 时式 (\ref{eq:propulsion_power}) 的退化值）。式 (\ref{eq:total_energy}) 表明，无人机能耗同时受飞行速度分布、悬停次数 $K$ 和悬停时长 $T_h$ 影响。在后续的轨迹优化问题中，总能耗 $E_{\mathrm{total}}$ 需满足预设的机载能量预算约束 $E_{\mathrm{tot}}$。
+
+上述推进能耗模型对应 \texttt{problem.py} 中的 \texttt{propulsion\_power} 函数。
+
+\section{优化问题形式化}
+
+基于上述系统模型，本节将通信感知一体化 UAV 轨迹设计形式化为一个多阶段优化问题。首先给出全局单阶段问题 P1 的数学描述；随后将其分解为多阶段优化框架 P2$(m)$，引入 SCA（Successive Convex Approximation，逐次凸逼近）方法处理非凸约束；最后阐述权重参数 $\eta$ 的物理意义与多阶段闭环逻辑。
+
+\subsection{全局优化问题 P1}
+
+考虑包含 $N$ 个航点、$K=\lfloor N/\mu\rfloor$ 个悬停点的 UAV 完整飞行轨迹。优化的目标是在通信性能（平均速率 $\bar{R}$）与感知性能（CRB）之间取得最优权衡。引入权重因子 $\eta\in[0,1]$，定义全局优化问题 P1 为：
+
+\begin{align}
+\text{(P1)}\quad\min_{\{\mathbf{s}[n]\}_{n=1}^{N}}\;& \eta\cdot\mathrm{CRB}_{\mathrm{xyz}}\bigl(\mathcal{H},\hat{\mathbf{t}}\bigr)-(1-\eta)\cdot\bar{R}\bigl(\{\mathbf{s}[n]\}\bigr)\\
+\text{s.t.}\;&\mathbf{v}[1]=\frac{\mathbf{s}[1]-\mathbf{s}_0}{T_f},\;\mathbf{v}[n]=\frac{\mathbf{s}[n]-\mathbf{s}[n-1]}{T_f},\; n=2,\ldots,N\\
+&\|\mathbf{v}[n]\|\leq V_{\max},\quad\forall n\\
+&0\leq x[n]\leq L_x,\;0\leq y[n]\leq L_y,\;z_{\min}\leq z[n]\leq z_{\max},\quad\forall n\\
+&E_{\mathrm{total}}\bigl(\{\mathbf{v}[n]\},K\bigr)\leq E_{\mathrm{tot}}\\
+&\mathcal{H}=\bigl\{\mathbf{s}[k\mu]\bigr\}_{k=1}^{K},\quad K=\left\lfloor\frac{N}{\mu}\right\rfloor
+\label{eq:p1}
+\end{align}
+
+其中 $\hat{\mathbf{t}}$ 为当前阶段开始时的目标位置估计值（初始阶段由粗扫描 MLE 提供\cite{Kay1993}），$\mathrm{CRB}_{\mathrm{xyz}}$ 由式 (\ref{eq:crb_xyz}) 给出，$\bar{R}$ 由式 (\ref{eq:average_rate}) 给出，$E_{\mathrm{total}}$ 由式 (\ref{eq:total_energy}) 给出。
+
+\textbf{问题 P1 的非凸性}：目标函数中的 $\mathrm{CRB}_{\mathrm{xyz}}$ 涉及 FIM 逆矩阵的迹，是关于航点位置的高度非凸函数；$\bar{R}$ 包含对数项，同样是关于航点的非凸函数；能耗约束中的诱导功率项包含嵌套根式，亦呈非凸特性。此外，CRB 仅依赖于悬停点子集 $\mathcal{H}$ 而非全部航点，进一步加剧了问题的非凸和非光滑性质。因此，P1 是一个非凸优化问题，难以直接求得全局最优解。
+
+\subsection{多阶段框架与问题 P2$(m)$}
+
+\subsubsection{多阶段分解}
+
+受限于机载能量 $E_{\mathrm{tot}}$，UAV 单次飞行所能覆盖的区域和采集的测距样本数量有限。为了逐步提升目标定位精度，将整个任务分解为 $M$ 个阶段。设第 $m$ 阶段包含 $N_m$ 个航点（其中 $K_m=\lfloor N_m/\mu\rfloor$ 个悬停点），起点为上一阶段的终点 $\mathbf{s}_{\mathrm{start}}^{(m)}=\mathbf{s}^{(m-1)}[N_{m-1}]$（首阶段起点为 $\mathbf{s}_0$）。
+
+每个阶段结束后，UAV 利用累积的所有悬停点测距数据更新目标位置估计 $\hat{\mathbf{t}}^{(m)}$（通过 MLE 网格搜索或 EKF\cite{Rangzenegger2020}），该估计值作为下一阶段 CRB 计算的参考点。此"优化—执行—估计—再优化"的闭环结构，使得 UAV 轨迹随目标位置认知的增强而逐步自适应，体现了感知-通信-控制的深度融合。
+
+\subsubsection{累计通信速率}
+
+为了在阶段间公平地衡量通信性能，定义截至第 $m$ 阶段的累计平均速率\cite{Zeng2016}：
+
+\begin{equation}
+\bar{R}_{\mathrm{cum}}^{(m)}=
+\frac{\displaystyle\sum_{j=1}^{m-1}\sum_{n=1}^{N_j}R^{(j)}[n]+\sum_{n=1}^{N_m}R^{(m)}[n]}
+{\displaystyle\sum_{j=1}^{m-1}N_j+N_m}
+\label{eq:cumulative_rate}
+\end{equation}
+
+其中 $R^{(j)}[n]$ 表示第 $j$ 阶段的第 $n$ 个航点处的可达速率。记 $N_{\mathrm{prev}}=\sum_{j=1}^{m-1}N_j$ 和 $R_{\mathrm{prev}}=\sum_{j=1}^{m-1}\sum_{n=1}^{N_j}R^{(j)}[n]$ 分别为历史航点总数与速率累加和，则上式可简写为 $\bar{R}_{\mathrm{cum}}^{(m)}=(R_{\mathrm{prev}}+\sum_{n=1}^{N_m}R^{(m)}[n])\,/\,(N_{\mathrm{prev}}+N_m)$。
+
+\subsubsection{问题 P2$(m)$ 的数学表述}
+
+第 $m$ 阶段的优化问题在满足运动学、速度、空域和能耗约束的前提下，最小化该阶段轨迹对应的加权目标函数。令 $\mathbf{S}_m=\{\mathbf{s}^{(m)}[n]\}_{n=1}^{N_m}$ 为待优化的阶段轨迹，$\mathbf{V}_m=\{\mathbf{v}^{(m)}[n]\}_{n=1}^{N_m}$ 为对应的速度矢量，$\mathcal{H}_{\mathrm{hist}}=\bigcup_{j=1}^{m-1}\mathcal{H}^{(j)}$ 为历史悬停点集合，$\mathcal{H}_m=\{\mathbf{s}^{(m)}[k\mu]\}_{k=1}^{K_m}$ 为当前阶段悬停点。问题 P2$(m)$ 定义为：
+
+\begin{align}
+\text{(P2}(m))\quad\min_{\mathbf{S}_m,\mathbf{V}_m}\;&
+\eta\cdot\mathrm{CRB}_{\mathrm{xyz}}\bigl(\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m,\;\hat{\mathbf{t}}^{(m-1)}\bigr)
+-(1-\eta)\cdot\bar{R}_{\mathrm{cum}}^{(m)}\bigl(\mathbf{S}_m\bigr)\\
+\text{s.t.}\;&\mathbf{v}^{(m)}[1]=\frac{\mathbf{s}^{(m)}[1]-\mathbf{s}_{\mathrm{start}}^{(m)}}{T_f}\\
+&\mathbf{v}^{(m)}[n]=\frac{\mathbf{s}^{(m)}[n]-\mathbf{s}^{(m)}[n-1]}{T_f},\; n=2,\ldots,N_m\\
+&\|\mathbf{v}^{(m)}[n]\|\leq V_{\max},\quad\forall n\\
+&0\leq x^{(m)}[n]\leq L_x,\;0\leq y^{(m)}[n]\leq L_y,\;z_{\min}\leq z^{(m)}[n]\leq z_{\max},\quad\forall n\\
+&E^{(m)}\bigl(\mathbf{V}_m,K_m\bigr)\leq E_m
+\label{eq:p2m}
+\end{align}
+
+其中 $E_m$ 为第 $m$ 阶段开始时的剩余能量预算（$E_1=E_{\mathrm{tot}}-E_{\mathrm{scan}}$，$E_{m+1}=E_m-E^{(m)}$）。目标函数在通信项上引入 $1/1000$ 的数值缩放因子，以平衡两项的量级差异，提升 SCA 求解器的数值稳定性。
+
+\textbf{与 P1 的对比}：P2$(m)$ 与 P1 的关键区别在于：(i)~CRB 项基于\textbf{全部历史悬停点}评估（因为目标定位也使用了全部历史量测），而非仅当前阶段悬停点；(ii)~通信项采用累计平均口径 $\bar{R}_{\mathrm{cum}}^{(m)}$，确保阶段间速率贡献的一致性。
+
+\subsection{SCA 逐次凸逼近}
+
+P2$(m)$ 仍为非凸问题。SCA 的核心思想是在当前迭代点将非凸函数（CRB、速率、诱导功率）替换为其一阶泰勒展开（或保守凸逼近），从而将原问题转化为凸子问题迭代求解\cite{Zeng2016}。
+
+\subsubsection{CRB 线性化}
+
+在当前轨迹 $\mathbf{S}_{\mathrm{ref}}$ 处，对 CRB 函数进行一阶泰勒展开：
+
+\begin{equation}
+\widetilde{\mathrm{CRB}}(\mathbf{S})\approx\mathrm{CRB}(\mathbf{S}_{\mathrm{ref}})+
+\sum_{k\in\mathcal{H}_{\mathrm{cur}}}\sum_{d=1}^{3}\frac{\partial\,\mathrm{CRB}}{\partial s_{k,d}}\Bigr|_{\mathbf{S}_{\mathrm{ref}}}\!
+\bigl(s_{k,d}-s_{k,d}^{\mathrm{ref}}\bigr)
+\label{eq:crb_linearization}
+\end{equation}
+
+其中 $\mathcal{H}_{\mathrm{cur}}$ 为当前阶段悬停点的索引集合（历史悬停点为常量，不参与求导），偏导数 $\partial\mathrm{CRB}/\partial s_{k,d}$ 通过中心差分 $\bigl[\mathrm{CRB}(\mathbf{S}+\epsilon\,\mathbf{e}_{k,d})-\mathrm{CRB}(\mathbf{S}-\epsilon\,\mathbf{e}_{k,d})\bigr]/(2\epsilon)$ 数值计算。该线性化对应 \texttt{p2\_solver.py} 中的 \texttt{\_crb\_linearized} 函数。
+
+\subsubsection{速率线性化}
+
+类似地，对第 $n$ 个航点处的通信速率在参考点 $\mathbf{s}_{\mathrm{ref}}[n]$ 处线性化。令 $d_c^2[n]=z[n]^2+\|\mathbf{s}_{xy}[n]-\mathbf{u}\|^2$，有：
+
+\begin{equation}
+\widetilde{R}[n](\mathbf{s}[n])\approx R[n](\mathbf{s}_{\mathrm{ref}}[n])+
+\nabla_{\mathbf{s}}R[n]\bigr|_{\mathbf{s}_{\mathrm{ref}}[n]}\!\cdot\bigl(\mathbf{s}[n]-\mathbf{s}_{\mathrm{ref}}[n]\bigr)
+\label{eq:rate_linearization}
+\end{equation}
+
+其中梯度分量 $\nabla_{\mathbf{s}}R[n]$ 的闭式推导参见附录或 \texttt{p2\_solver.py} 中的 \texttt{\_rate\_linearized} 函数。
+
+\subsubsection{能耗约束的凸化}
+
+推进功率中的诱导功率项 $\sqrt{\sqrt{1+v^4/(4v_0^4)}-v^2/(2v_0^2)}$ 非凸。SCA 中引入辅助变量 $\delta_n>0$ 与松弛变量 $\xi_n\geq 0$，将该项替换为 $P_I\delta_n$，并附加以下凸约束\cite{Zeng2016}：
+
+\begin{align}
+\delta_n^{-2}-\xi_n&\leq\frac{1}{v_0^2}\Bigl[\|\mathbf{v}_n^{\mathrm{ref}}\|^2+
+2\bigl(\mathbf{v}_n^{\mathrm{ref}}\bigr)^{\mathsf{T}}\bigl(\mathbf{v}_n-\mathbf{v}_n^{\mathrm{ref}}\bigr)\Bigr]
+\label{eq:sca_51a}\\
+\xi_n&\leq\bigl(\delta_n^{\mathrm{ref}}\bigr)^2+2\delta_n^{\mathrm{ref}}\bigl(\delta_n-\delta_n^{\mathrm{ref}}\bigr)
+\label{eq:sca_51b}
+\end{align}
+
+其中式 (\ref{eq:sca_51a}) 的左侧 $\delta_n^{-2}$ 为凸函数（$\delta_n>0$），在每次 SCA 迭代中以 $\mathrm{inv\_pos}(\delta_n)^2$ 锥约束实现。式 (\ref{eq:sca_51b}) 是对 $\xi_n\leq\delta_n^2$ 的一阶泰勒松弛。当 SCA 收敛时，$\xi_n\to\delta_n^2$，辅助约束退化为原始诱导功率的等价表示。
+
+综上，在第 $l$ 次 SCA 迭代中，求解如下凸子问题：
+
+\begin{equation}
+\min_{\mathbf{S},\mathbf{V},\bm{\delta},\bm{\xi}}\;
+\eta\cdot\widetilde{\mathrm{CRB}}(\mathbf{S};\mathbf{S}^{(l)})
+-(1-\eta)\cdot\widetilde{R}_{\mathrm{cum}}(\mathbf{S};\mathbf{S}^{(l)})
+\quad\text{s.t.}\quad
+\text{式 (\ref{eq:sca_51a})(\ref{eq:sca_51b})，运动学/速度/空域/能耗}
+\label{eq:sca_subproblem}
+\end{equation}
+
+SCA 迭代在目标函数变化量小于容差 $\tau_{\mathrm{obj}}=10^{-3}$ 或达到最大迭代次数 $I_{\max}=1000$ 时终止。线搜索（步长候选集 $\{1.0,0.8,0.6,0.4,0.2,0.1,0.05\}$）用于保证每步迭代的可行性。上述 SCA 求解过程对应 \texttt{p2\_solver.py} 中的 \texttt{solve\_p2m\_sca} 函数。
+
+\subsection{权重参数 $\eta$ 与多阶段闭环逻辑}
+
+\subsubsection{权衡因子 $\eta$}
+
+权重因子 $\eta\in[0,1]$ 控制通信与感知之间的偏好：
+
+\begin{itemize}
+\item $\eta\to 1$：系统偏重感知性能，UAV 轨迹倾向于在目标附近形成良好的距离几何构型以最小化 CRB；
+\item $\eta\to 0$：系统偏重通信性能，UAV 轨迹倾向于靠近地面用户以最大化下行速率；
+\item $\eta=0.5$：通信与感知等权重，适用于对两者有均衡需求的应用场景。
+\end{itemize}
+
+由于 CRB 的数值量级（典型值 $10^0\sim 10^3\;\text{m}^2$）远小于通信速率（典型值 $10^5\sim 10^7\;\text{bps}$），目标函数中通信项除以 $1000$ 以平衡两项的相对贡献。
+
+\subsubsection{多阶段闭环流程}
+
+完整的多阶段轨迹优化与目标定位闭环流程总结如下：
+
+\begin{enumerate}
+\item \textbf{初始粗扫描（Stage 0）}：在基站附近 $2\times 2$ 格点处执行短距悬停测距（航点数为 $4$，悬停时长 $T_h$），利用两级网格搜索 MLE 获取目标初始位置估计 $\hat{\mathbf{t}}^{(0)}$，并扣减扫描能耗 $E_{\mathrm{scan}}$。
+\item \textbf{阶段 $m=1,2,\ldots$}（当 $E_m>0$ 时循环）：
+\begin{enumerate}
+\item 基于当前目标估计 $\hat{\mathbf{t}}^{(m-1)}$、历史悬停点 $\mathcal{H}_{\mathrm{hist}}$、剩余能量 $E_m$ 和历史速率累计值 $(N_{\mathrm{prev}},R_{\mathrm{prev}})$，构建阶段数据 \texttt{StageData}；
+\item 调用 SCA 求解器 \texttt{solve\_p2m\_sca} 求解 P2$(m)$，得到最优阶段轨迹 $\mathbf{S}_m^*$；
+\item 沿 $\mathbf{S}_m^*$ 飞行，在阶段悬停点处采集新的距离测量值 $\{r[k]\}$；
+\item 将新量测加入累计量测集，运行 MLE（或 EKF 递推更新）获得更新的目标位置估计 $\hat{\mathbf{t}}^{(m)}$；
+\item 更新剩余能量 $E_{m+1}=E_m-E^{(m)}$，更新历史速率累计值，将 $\mathcal{H}_m$ 并入 $\mathcal{H}_{\mathrm{hist}}$。
+\end{enumerate}
+\item \textbf{终止条件}：当剩余能量不足以支撑最低航点数（$N_m<3\mu$）时终止。
+\end{enumerate}
+
+该闭环流程对应 \texttt{simulation\_pipeline.py} 中的 \texttt{run\_multistage\_with\_mle} 函数，体现了"感知引导轨迹、轨迹增强感知"的 ISAC 核心思想。
+
+\section{本章小结}
+
+本章从以下六个方面建立了 UAV 通信感知一体化系统的数学模型：
+\begin{enumerate}
+\item \textbf{轨迹模型}（2.1 节）：以离散航点序列描述 UAV 三维轨迹，通过有限差分定义飞行速度，每 $\mu$ 个航点提取一个悬停点用于感知测距；
+\item \textbf{通信模型}（2.2 节）：基于 LoS 自由空间路径损耗，建立了航点到地面用户的距离、信道增益、SNR 及可达速率的数学模型，以平均速率 $\bar{R}$ 衡量通信性能；
+\item \textbf{感知测距模型}（2.3 节）：针对双程传播的感知链路，建立了悬停点到目标的距离测量模型，刻画了测量噪声方差随距离的四次方增长特性；
+\item \textbf{CRB 推导}（2.4 节）：在均值和方差均依赖目标参数的条件下，推导了完整的 FIM 及 CRB 表达式，分析了近距离几何对定位精度的主导作用，以 $\mathrm{CRB}_{\mathrm{xyz}}=\mathrm{tr}(\mathbf{F}^{-1})$ 衡量感知性能；
+\item \textbf{推进能耗模型}（2.5 节）：引入旋翼无人机三部分功率模型，给出总能耗的解析表达，为轨迹优化提供约束基础；
+\item \textbf{优化问题形式化}（2.6 节）：将 ISAC 轨迹设计抽象为全局非凸优化问题 P1，提出多阶段分解框架 P2$(m)$，阐述了 SCA 凸化策略、累计速率口径、权重因子 $\eta$ 的物理意义以及"优化—执行—估计—再优化"的闭环逻辑。
+\end{enumerate}
+
+这些模型与 \texttt{system\_model.py}、\texttt{problem.py} 和 \texttt{p2\_solver.py} 中的函数一一对应，构成了第三章优化问题建模与第四章仿真实验的理论支撑。
+
+% ----------------------------------------------------------------------
+% 参考文献条目（按需合并入主文献库；此处仅列本章涉及的关键文献）
+% ----------------------------------------------------------------------
+\begin{thebibliography}{10}
+
+\bibitem{Rangzenegger2020}
+S.~Rangzenegger, R.~Prassler, H.~Bischof.
+``On the Cram\'{e}r-Rao Lower Bound for Time-of-Arrival Based Positioning,''
+\textit{IEEE Trans. Signal Process.}, 2020.
+
+\bibitem{Zeng2016}
+Y.~Zeng, R.~Zhang.
+``Energy-Efficient UAV Communication with Trajectory Optimization,''
+\textit{IEEE Trans. Wireless Commun.}, vol.~15, no.~6, pp.~3747--3760, 2016.
+
+\bibitem{Kay1993}
+S.~M.~Kay.
+\textit{Fundamentals of Statistical Signal Processing: Estimation Theory}.
+Prentice-Hall, 1993.
+
+\end{thebibliography}

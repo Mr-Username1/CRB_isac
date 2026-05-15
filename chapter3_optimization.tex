@@ -1,0 +1,720 @@
+\chapter{问题建模与轨迹优化}
+
+本章在第2章系统模型的基础上，详细阐述将非凸的通信感知一体化轨迹优化问题转换为可求解凸问题的方法论，并给出完整的算法设计、实现与收敛性分析。核心内容包括：单阶段优化问题 P2$(m)$ 的精确数学表述（\S\ref{sec:p2m}）；基于逐次凸逼近（SCA）的非凸函数线性化与约束凸化技术（\S\ref{sec:sca}），涵盖通信速率线性化、CRB 线性化和能量约束凸化三个关键环节；线搜索与迭代求解机制（\S\ref{sec:line_search}）；以及多阶段扩展框架、累计速率口径与完整算法流程（\S\ref{sec:multistage}）。
+
+% ======================================================================
+\section{单阶段优化问题 P2$(m)$ 建模}
+\label{sec:p2m}
+% ======================================================================
+
+\subsection{问题分解动机}
+
+全局优化问题 P1（式\eqref{eq:p1}）同时涉及全部 $N$ 个航点和 $K$ 个悬停点，决策变量维度高达 $3N$，且目标函数与约束均为非凸，直接求解不可行。为此，采用\textbf{多阶段分解}策略：将总能量预算 $E_{\mathrm{tot}}$ 分配至 $M$ 个顺序执行的阶段，每个阶段 $m$ 仅优化 $N_m$ 个航点（$N_m\ll N$），阶段间通过目标位置估计的迭代更新实现闭环自适应。
+
+\subsection{符号体系}
+
+令第 $m$ 阶段待优化的轨迹为 $\mathbf{S}_m=\{\mathbf{s}^{(m)}[n]\}_{n=1}^{N_m}\subset\mathbb{R}^3$，对应的速度矢量为 $\mathbf{V}_m=\{\mathbf{v}^{(m)}[n]\}_{n=1}^{N_m}$。定义以下阶段上下文参数：
+
+\begin{itemize}
+    \item $\mathbf{s}_{\mathrm{start}}^{(m)}\in\mathbb{R}^3$：阶段起始位置（$m=1$ 时为基站 $\mathbf{s}_0$；$m>1$ 时为上一阶段末航点）；
+    \item $\mathcal{H}_{\mathrm{hist}}=\bigcup_{j=1}^{m-1}\mathcal{H}^{(j)}$：历史累积悬停点集合，共 $K_{\mathrm{hist}}$ 个；
+    \item $\mathcal{H}_m=\{\mathbf{s}^{(m)}[k\mu]\}_{k=1}^{K_m}$：当前阶段悬停点，$K_m=\lfloor N_m/\mu\rfloor$；
+    \item $\hat{\mathbf{t}}^{(m-1)}\in\mathbb{R}^3$：第 $m-1$ 阶段结束后的目标位置估计；
+    \item $E_m$：第 $m$ 阶段开始时的剩余能量；
+    \item $N_{\mathrm{prev}}=\sum_{j=1}^{m-1}N_j$：历史累积航点数；
+    \item $R_{\mathrm{prev}}=\sum_{j=1}^{m-1}\sum_{n=1}^{N_j}R^{(j)}[n]$：历史累积速率和。
+\end{itemize}
+
+\subsection{目标函数}
+
+\subsubsection{CRB 项}
+
+CRB 基于全部历史悬停点与当前阶段悬停点的并集评估，以反映目标定位依赖所有累积量测的事实：
+
+\begin{equation}
+\mathrm{CRB}_m(\mathbf{S}_m)=\mathrm{CRB}_{\mathrm{xyz}}\bigl(\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m,\;\hat{\mathbf{t}}^{(m-1)}\bigr)
+\label{eq:crb_p2m}
+\end{equation}
+
+其中 $\mathrm{CRB}_{\mathrm{xyz}}$ 的定义同式\eqref{eq:crb_xyz}。历史悬停点 $\mathcal{H}_{\mathrm{hist}}$ 在阶段 $m$ 中为固定常量，$\mathrm{CRB}_m$ 仅通过当前悬停点 $\mathcal{H}_m$ 依赖于决策变量 $\mathbf{S}_m$。
+
+\subsubsection{累计通信速率项}
+
+为在阶段间公平衡量通信性能，定义截至第 $m$ 阶段的累计平均速率\cite{Jing2022}：
+
+\begin{equation}
+\bar{R}_{\mathrm{cum}}^{(m)}(\mathbf{S}_m)=
+\frac{\displaystyle R_{\mathrm{prev}}+\sum_{n=1}^{N_m}R\bigl(\mathbf{s}^{(m)}[n]\bigr)}
+{\displaystyle N_{\mathrm{prev}}+N_m}
+\label{eq:cum_rate_p2m}
+\end{equation}
+
+其中 $R(\mathbf{s})$ 为航点 $\mathbf{s}$ 处的可达速率（式\eqref{eq:rate_per_waypoint}）。式\eqref{eq:cum_rate_p2m} 对应代码中 \texttt{StageData.R\_prev\_sum} 和 \texttt{StageData.N\_prev\_total} 的用法，确保新阶段速率与历史速率按航点数加权平均。
+
+\subsubsection{加权目标}
+
+引入权衡因子 $\eta\in[0,1]$，P2$(m)$ 的目标函数为：
+
+\begin{equation}
+J_m(\mathbf{S}_m)=\eta\cdot\mathrm{CRB}_m(\mathbf{S}_m)-(1-\eta)\cdot\frac{\bar{R}_{\mathrm{cum}}^{(m)}(\mathbf{S}_m)}{1000}
+\label{eq:obj_p2m}
+\end{equation}
+
+其中通信项除以 $1000$ 为数值缩放因子，用于平衡 CRB（典型量级 $10^0\sim 10^3$）与通信速率（典型量级 $10^5\sim 10^7\;\mathrm{bps}$）之间的量级差异，提升优化求解器的数值稳定性。
+
+\subsection{约束条件}
+
+\subsubsection{运动学约束}
+
+速度与位置的线性关系：
+
+\begin{align}
+\mathbf{v}^{(m)}[1]&=\frac{\mathbf{s}^{(m)}[1]-\mathbf{s}_{\mathrm{start}}^{(m)}}{T_f}
+\label{eq:kin1}\\
+\mathbf{v}^{(m)}[n]&=\frac{\mathbf{s}^{(m)}[n]-\mathbf{s}^{(m)}[n-1]}{T_f},\quad n=2,\ldots,N_m
+\label{eq:kin2}
+\end{align}
+
+\subsubsection{速度与空域约束}
+
+\begin{align}
+\|\mathbf{v}^{(m)}[n]\|&\leq V_{\max},\quad \forall n \label{eq:speed}\\
+0\leq x^{(m)}[n]\leq L_x,\quad 0\leq y^{(m)}[n]&\leq L_y,\quad z_{\min}\leq z^{(m)}[n]\leq z_{\max},\quad \forall n \label{eq:airspace}
+\end{align}
+
+\subsubsection{能耗约束}
+
+阶段 $m$ 的总推进能耗需满足剩余能量预算：
+
+\begin{equation}
+E^{(m)}(\mathbf{V}_m,K_m)\leq E_m
+\label{eq:energy_p2m}
+\end{equation}
+
+其中
+
+\begin{equation}
+E^{(m)}(\mathbf{V}_m,K_m)=T_f\sum_{n=1}^{N_m}P_{\mathrm{prop}}\bigl(\|\mathbf{v}^{(m)}[n]\|\bigr)+T_h\cdot K_m\cdot P_{\mathrm{prop}}(0)
+\label{eq:energy_breakdown}
+\end{equation}
+
+推进功率 $P_{\mathrm{prop}}(v)$ 由式\eqref{eq:propulsion_power} 给出，包含三项：叶片剖面功率（$v$ 的二次函数）、诱导功率（$v$ 的非凸函数）和寄生功率（$v$ 的三次函数）。诱导功率项的形式为：
+
+\begin{equation}
+P_I\cdot\sqrt{\sqrt{1+\frac{v^4}{4v_0^4}}-\frac{v^2}{2v_0^2}}
+\label{eq:induced_power_raw}
+\end{equation}
+
+该项的非凸性是能耗约束凸化的主要难点，将在 \S\ref{sec:energy_convex} 中专门处理。
+
+\subsection{完整问题表述}
+
+综上，单阶段优化问题 P2$(m)$ 的完整数学表述为：
+
+\begin{framed}
+\begin{align}
+\text{(P2}(m))\quad\min_{\mathbf{S}_m,\mathbf{V}_m}\;&
+\eta\cdot\mathrm{CRB}_{\mathrm{xyz}}\bigl(\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m,\;\hat{\mathbf{t}}^{(m-1)}\bigr)
+-\frac{1-\eta}{1000}\cdot\frac{R_{\mathrm{prev}}+\sum_{n=1}^{N_m}R\bigl(\mathbf{s}^{(m)}[n]\bigr)}{N_{\mathrm{prev}}+N_m}\\
+\text{s.t.}\quad&\text{运动学约束：式\eqref{eq:kin1}\eqref{eq:kin2}}\nonumber\\
+&\text{速度约束：式\eqref{eq:speed}}\nonumber\\
+&\text{空域约束：式\eqref{eq:airspace}}\nonumber\\
+&\text{能耗约束：式\eqref{eq:energy_p2m}}\nonumber\\
+&\mathcal{H}_m=\bigl\{\mathbf{s}^{(m)}[k\mu]\bigr\}_{k=1}^{K_m},\quad K_m=\lfloor N_m/\mu\rfloor\nonumber
+\end{align}
+\end{framed}
+
+\textbf{非凸性分析}：目标函数中 $\mathrm{CRB}_{\mathrm{xyz}}$ 为 FIM 逆矩阵的迹，对悬停点坐标呈高度非凸依赖；$R(\mathbf{s})$ 包含对数项，非凸；能耗约束中诱导功率包含嵌套根式，非凸。因此 P2$(m)$ 为非凸优化问题，需借助 \S\ref{sec:sca} 所述的 SCA 技术求解。
+
+% ======================================================================
+\section{SCA 凸近似方法}
+\label{sec:sca}
+% ======================================================================
+
+逐次凸逼近（Successive Convex Approximation, SCA）的核心思想是：在当前迭代点将原问题中的非凸函数替换为其凸上界（对最小化问题中的非凸项）或凸下界（对非凸约束的可行域边界），从而构造一个凸的子问题；迭代求解该子问题，逐步逼近原问题的驻点\cite{Zeng2016}。
+
+设第 $l$ 次 SCA 迭代的参考点为 $(\mathbf{S}^{(l)},\mathbf{V}^{(l)},\bm{\delta}^{(l)})$，本节逐一给出各非凸项的凸近似构造。
+
+\subsection{通信速率线性化}
+\label{sec:rate_linear}
+
+通信速率函数 $R(\mathbf{s})$ 可通过一阶泰勒展开构造其\textbf{全局下界}（因 $R(\mathbf{s})$ 是凹函数，其一阶展开为全局上界；但在最小化问题中，目标函数中 $R$ 带负号，因此需要 $R$ 的下界以确保目标函数的凸上界近似）。事实上，$R(\mathbf{s})$ 是 $\mathbf{s}$ 的非凸函数，但为 $d_c^2$ 的凸函数——以下采用在参考点处的一阶展开作为仿射近似。
+
+\subsubsection{梯度推导}
+
+在参考点 $\mathbf{s}_{\mathrm{ref}}=(x_{\mathrm{ref}},y_{\mathrm{ref}},z_{\mathrm{ref}})$ 处，速率的显式梯度推导如下。
+
+定义中间变量：
+
+\begin{equation}
+C\triangleq\frac{P\cdot\alpha_0}{\sigma_0^2},\quad
+q(\mathbf{s})\triangleq z^2+(x-x_u)^2+(y-y_u)^2=d_c^2(\mathbf{s})
+\label{eq:intermediate_q}
+\end{equation}
+
+速率函数可写为：
+
+\begin{equation}
+R(\mathbf{s})=B\log_2\!\left(1+\frac{C}{q(\mathbf{s})}\right)
+\label{eq:rate_q}
+\end{equation}
+
+对 $\mathbf{s}$ 的各分量求偏导：
+
+\begin{align}
+\frac{\partial R}{\partial q}&=\frac{B}{\ln 2}\cdot\frac{1}{1+C/q}\cdot\left(-\frac{C}{q^2}\right)
+=-\frac{B}{\ln 2}\cdot\frac{C}{q^2(1+C/q)}
+\label{eq:dR_dq}\\[4pt]
+\frac{\partial q}{\partial x}&=2(x-x_u),\quad
+\frac{\partial q}{\partial y}=2(y-y_u),\quad
+\frac{\partial q}{\partial z}=2z
+\label{eq:dq_ds}
+\end{align}
+
+由链式法则：
+
+\begin{equation}
+\nabla_{\mathbf{s}}R(\mathbf{s})=\frac{\partial R}{\partial q}\cdot\nabla_{\mathbf{s}}q
+\label{eq:chain_rule}
+\end{equation}
+
+代入得梯度各分量：
+
+\begin{equation}
+\nabla_{\mathbf{s}}R(\mathbf{s})=
+\frac{B}{\ln 2}\cdot\frac{1}{1+C/q}\cdot\left(-\frac{C}{q^2}\right)\cdot
+\begin{bmatrix}2(x-x_u)\\2(y-y_u)\\2z\end{bmatrix}
+\label{eq:gradient_R}
+\end{equation}
+
+\subsubsection{仿射近似}
+
+速率在参考点 $\mathbf{s}_{\mathrm{ref}}[n]$ 处的仿射近似为：
+
+\begin{equation}
+\widetilde{R}[n](\mathbf{s}[n])=R[n](\mathbf{s}_{\mathrm{ref}}[n])+
+\nabla_{\mathbf{s}}R[n]\big|_{\mathbf{s}_{\mathrm{ref}}[n]}\!\cdot\bigl(\mathbf{s}[n]-\mathbf{s}_{\mathrm{ref}}[n]\bigr)
+\label{eq:rate_affine}
+\end{equation}
+
+阶段内 $N_m$ 个航点的平均仿射速率为：
+
+\begin{equation}
+\widetilde{R}_{\mathrm{stage}}(\mathbf{S}_m)=\frac{1}{N_m}\sum_{n=1}^{N_m}\widetilde{R}[n](\mathbf{s}[n])
+\label{eq:stage_affine_rate}
+\end{equation}
+
+进而得到累计速率的仿射近似：
+
+\begin{equation}
+\widetilde{R}_{\mathrm{cum}}^{(m)}(\mathbf{S}_m)=
+\frac{R_{\mathrm{prev}}+N_m\cdot\widetilde{R}_{\mathrm{stage}}(\mathbf{S}_m)}{N_{\mathrm{prev}}+N_m}
+\label{eq:cum_affine_rate}
+\end{equation}
+
+该线性化对应 \texttt{p2\_solver.py} 中 \texttt{\_rate\_linearized} 函数（第65--91行）。该函数遍历 $N_m$ 个航点，累加各点的速率常数项 $R_0$ 与梯度矩阵 $\mathbf{G}\in\mathbb{R}^{N_m\times 3}$，最终构造仿射表达式 $R_0+\sum_{i}\mathbf{G}_i\cdot(\mathbf{s}_i-\mathbf{s}_{\mathrm{ref},i})$。
+
+\subsection{CRB 线性化}
+\label{sec:crb_linear}
+
+\subsubsection{依赖结构分析}
+
+CRB 函数 $\mathrm{CRB}_{\mathrm{xyz}}(\mathcal{H},\hat{\mathbf{t}})$ 仅依赖于悬停点集合 $\mathcal{H}$ 中每个悬停点的三维坐标，与航点 $\{\mathbf{s}[n]\}$ 之间的中间航点无关。令 $\mathcal{H}_{\mathrm{all}}=\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m$ 为全部悬停点（共 $K_{\mathrm{all}}=K_{\mathrm{hist}}+K_m$ 个），其中：
+
+\begin{itemize}
+    \item $\mathcal{H}_{\mathrm{hist}}$ 为历史悬停点——坐标固定，不参与优化；
+    \item $\mathcal{H}_m=\{\mathbf{h}_m[k]\}_{k=1}^{K_m}$ 为当前阶段悬停点——坐标 $\mathbf{h}_m[k]=\mathbf{s}[k\mu]$ 为决策变量的线性函数。
+\end{itemize}
+
+\subsubsection{数值梯度计算}
+
+CRB 对悬停点坐标的解析梯度涉及 $3\times 3$ 矩阵逆的导数，推导繁琐。本工作采用\textbf{中心有限差分}计算数值梯度（对应 \texttt{\_crb\_linearized} 函数第105--128行）：
+
+\begin{equation}
+\frac{\partial\,\mathrm{CRB}}{\partial h_{k,d}}\approx
+\frac{\mathrm{CRB}(\mathcal{H}_{\mathrm{all}}+\epsilon\,\mathbf{e}_{k,d})-
+\mathrm{CRB}(\mathcal{H}_{\mathrm{all}}-\epsilon\,\mathbf{e}_{k,d})}{2\epsilon}
+\label{eq:crb_finite_diff}
+\end{equation}
+
+其中 $\epsilon=10^{-3}$ 为扰动步长，$\mathbf{e}_{k,d}$ 为仅在悬停点 $k$ 的第 $d$ 维取 $1$ 的单位向量。需注意：
+
+\begin{itemize}
+    \item 仅对当前阶段悬停点 $\mathcal{H}_m$ 的各维计算梯度（$K_m\times 3$ 个偏导数）；
+    \item 历史悬停点 $\mathcal{H}_{\mathrm{hist}}$ 作为 FIM 累加中的固定项，不参与求导。
+\end{itemize}
+
+\subsubsection{仿射近似}
+
+记 $\mathbf{G}_{\mathrm{CRB}}\in\mathbb{R}^{K_m\times 3}$ 为数值梯度矩阵，CRB 在参考悬停点 $\mathcal{H}_m^{\mathrm{ref}}$ 处的仿射近似为：
+
+\begin{equation}
+\widetilde{\mathrm{CRB}}(\mathcal{H}_m)=
+\mathrm{CRB}(\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m^{\mathrm{ref}})+
+\sum_{k=1}^{K_m}\sum_{d=1}^{3}[\mathbf{G}_{\mathrm{CRB}}]_{k,d}\cdot\bigl(h_{k,d}-h_{k,d}^{\mathrm{ref}}\bigr)
+\label{eq:crb_affine}
+\end{equation}
+
+在 cvxpy 中，该仿射表达式通过以下方式构造：从决策变量 $\mathbf{S}$ 中按 $\mu$ 间隔提取悬停点子矩阵 $\mathbf{H}_{\mathrm{cur}}$（对应 \texttt{\_extract\_hover\_expr} 函数第35--37行，利用 \texttt{cp.vstack} 构造 $K_m\times 3$ 的悬停点表达式），然后以 \texttt{cp.sum(cp.multiply(G\_cur, H\_cur\_var - H\_cur\_ref))} 累加扰动项。
+
+\subsection{能量约束凸化}
+\label{sec:energy_convex}
+
+推进功率 $P_{\mathrm{prop}}(v)$（式\eqref{eq:propulsion_power}）由叶片剖面功率、诱导功率和寄生功率三部分构成。其中，叶片剖面功率 $P_0(1+3v^2/U_{\mathrm{tip}}^2)$ 为速度的二次函数（凸），寄生功率 $\frac{1}{2}D_0\rho sA v^3$ 在 $v\geq 0$ 时为三次锥可表示函数，二者均可直接在 cvxpy 中以 \texttt{cp.sum\_squares} 和 \texttt{cp.power(cp.norm(v,2), 3)} 建模。唯一的非凸来源是诱导功率项 $P_I\sqrt{\sqrt{1+v^4/(4v_0^4)}-v^2/(2v_0^2)}$。
+
+为处理该非凸项，本文采用 Jing 等\cite{Jing2022} 提出的辅助变量 SCA 凸化方法：对每个航点 $n$，引入辅助变量 $\delta_n>0$ 和松弛变量 $\xi_n\geq 0$，以 $P_I\delta_n$ 替代原始诱导功率项，并附加以下两条凸约束将非凸可行域保守内逼近为凸可行域：
+
+\begin{align}
+\boxed{\;
+\frac{1}{\delta_n^2}-\xi_n\;\leq\;
+\frac{1}{v_0^2}\Bigl[\|\mathbf{v}_n^{\mathrm{ref}}\|^2+
+2\bigl(\mathbf{v}_n^{\mathrm{ref}}\bigr)^{\mathsf{T}}\bigl(\mathbf{v}_n-\mathbf{v}_n^{\mathrm{ref}}\bigr)\Bigr]
+\;}\label{eq:constraint_51a}
+\\[4pt]
+\boxed{\;
+\xi_n\;\leq\;\bigl(\delta_n^{\mathrm{ref}}\bigr)^2+
+2\delta_n^{\mathrm{ref}}\bigl(\delta_n-\delta_n^{\mathrm{ref}}\bigr)
+\;}\label{eq:constraint_51b}
+\end{align}
+
+其中 $(\mathbf{v}_n^{\mathrm{ref}},\delta_n^{\mathrm{ref}})$ 为当前 SCA 迭代的参考点。约束 (51a) 和 (51b) 的构建逻辑如下：Jing 等\cite{Jing2022} 证明了诱导功率项等价于最小化 $P_I\delta_n$ 且满足非线性约束 $\delta_n^{-2}-\delta_n^2\leq v_n^2/v_0^2$；将此约束中的凹项 $-\delta_n^2$ 以松弛变量 $-\xi_n$ 替换（得式\eqref{eq:constraint_51a}），并附加 $\xi_n\leq\delta_n^2$ 在 $\delta_n^{\mathrm{ref}}$ 处的一阶泰勒展开（得式\eqref{eq:constraint_51b}），即可形成原可行域的保守凸逼近。当 SCA 收敛至 $\mathbf{v}_n=\mathbf{v}_n^{\mathrm{ref}}$、$\delta_n=\delta_n^{\mathrm{ref}}$ 时，式\eqref{eq:constraint_51b} 退化为 $\xi_n\leq\delta_n^2$，联合式\eqref{eq:constraint_51a} 恢复原始约束的紧性。此外，需附加变量定义域约束：
+
+\begin{equation}
+\delta_n\geq\varepsilon_{\delta}=10^{-3},\quad \xi_n\geq 0,\quad\forall n
+\label{eq:delta_xi_bounds}
+\end{equation}
+
+其中 $\varepsilon_{\delta}$ 避免 \texttt{cp.inv\_pos}$(\delta_n)$ 的数值奇异。
+
+综上，第 $n$ 个航点的凸化推进功率及阶段总能耗约束为（对应 \texttt{solve\_p2m\_sca} 第189--200行）：
+
+\begin{align}
+\widetilde{P}_n(\mathbf{v}_n,\delta_n)&=
+P_0\!\left(1+\frac{3\|\mathbf{v}_n\|^2}{U_{\mathrm{tip}}^2}\right)
++\frac{1}{2}D_0\,\rho\,s\,A\,\|\mathbf{v}_n\|^3
++P_I\cdot\delta_n\\
+\widetilde{E}^{(m)}&=T_f\sum_{n=1}^{N_m}\widetilde{P}_n(\mathbf{v}_n,\delta_n)+
+T_h\cdot K_m\cdot P_{\mathrm{prop}}(0)\leq E_m
+\label{eq:energy_convex_full}
+\end{align}
+
+\subsection{凸子问题汇总}
+
+经过上述线性化与凸化处理，P2$(m)$ 在第 $l$ 次 SCA 迭代中被转化为如下凸子问题，其决策变量为航点 $\mathbf{S}=\{\mathbf{s}_n\}_{n=1}^{N_m}$、速度 $\mathbf{V}=\{\mathbf{v}_n\}_{n=1}^{N_m}$、辅助变量 $\bm{\delta}=\{\delta_n\}_{n=1}^{N_m}$ 和松弛变量 $\bm{\xi}=\{\xi_n\}_{n=1}^{N_m}$，参考点 $(\mathbf{S}^{(l)},\mathbf{V}^{(l)},\bm{\delta}^{(l)})$ 由上一轮 SCA 迭代（或初始轨迹）给定：
+
+\begin{framed}
+\begin{align}
+\min_{\mathbf{S},\mathbf{V},\bm{\delta},\bm{\xi}}\;&
+\eta\cdot\widetilde{\mathrm{CRB}}\bigl(\mathbf{S};\mathbf{S}^{(l)}\bigr)
+-\frac{1-\eta}{1000}\cdot\widetilde{R}_{\mathrm{cum}}^{(m)}\bigl(\mathbf{S};\mathbf{S}^{(l)}\bigr)
+\label{eq:convex_obj}\\
+\text{s.t.}\quad
+&\mathbf{v}_1=\frac{\mathbf{s}_1-\mathbf{s}_{\mathrm{start}}^{(m)}}{T_f},\;
+\mathbf{v}_n=\frac{\mathbf{s}_n-\mathbf{s}_{n-1}}{T_f},\; n=2,\ldots,N_m
+\label{eq:convex_kin}\\[4pt]
+&\|\mathbf{v}_n\|\leq V_{\max},\quad\forall n\in\{1,\ldots,N_m\}
+\label{eq:convex_speed}\\[4pt]
+&0\leq x_n\leq L_x,\;0\leq y_n\leq L_y,\;z_{\min}\leq z_n\leq z_{\max},\quad\forall n
+\label{eq:convex_airspace}\\[4pt]
+&\frac{1}{\delta_n^2}-\xi_n\;\leq\;
+\frac{1}{v_0^2}\Bigl[\|\mathbf{v}_n^{(l)}\|^2+
+2\bigl(\mathbf{v}_n^{(l)}\bigr)^{\mathsf{T}}\bigl(\mathbf{v}_n-\mathbf{v}_n^{(l)}\bigr)\Bigr],\quad\forall n
+\label{eq:convex_51a}\\[4pt]
+&\xi_n\;\leq\;\bigl(\delta_n^{(l)}\bigr)^2+
+2\delta_n^{(l)}\bigl(\delta_n-\delta_n^{(l)}\bigr),\quad\forall n
+\label{eq:convex_51b}\\[4pt]
+&\delta_n\geq\varepsilon_{\delta},\;\xi_n\geq 0,\quad\forall n
+\label{eq:convex_aux}\\[4pt]
+&T_f\sum_{n=1}^{N_m}\widetilde{P}_n(\mathbf{v}_n,\delta_n)+
+T_h K_m P_{\mathrm{prop}}(0)\leq E_m
+\label{eq:convex_energy}
+\end{align}
+\end{framed}
+
+其中 $\widetilde{\mathrm{CRB}}$ 为 CRB 函数在参考悬停点 $\mathcal{H}_m^{(l)}$ 处的仿射近似（式\eqref{eq:crb_affine}），$\widetilde{R}_{\mathrm{cum}}^{(m)}$ 为累计通信速率的仿射近似（式\eqref{eq:cum_affine_rate}），$\widetilde{P}_n(\mathbf{v}_n,\delta_n)$ 为第 $n$ 个航点处的凸化推进功率（式\eqref{eq:energy_convex_full}）。该子问题中，约束\eqref{eq:convex_kin}--\eqref{eq:convex_airspace} 为原始线性/凸约束，约束\eqref{eq:convex_51a}--\eqref{eq:convex_51b} 为诱导功率的 SCA 保守凸近似，约束\eqref{eq:convex_aux} 为辅助变量定义域，约束\eqref{eq:convex_energy} 为阶段总能耗约束。
+
+\textbf{问题类型}：上述子问题为\textbf{二阶锥规划（SOCP）}。具体而言，目标函数为仿射函数（允许 SOC 表示）；约束\eqref{eq:convex_speed} 为二阶锥约束（$\|\mathbf{v}_n\|\leq V_{\max}$）；约束\eqref{eq:convex_51a} 左侧 $\delta_n^{-2}$ 以指数锥或幂锥实现（在 cvxpy 中为 \texttt{cp.inv\_pos} 原子连接的 SOC 分解），其余约束均为线性或仿射不等式。因此，该子问题可被现代内点法 SOCP 求解器高效求解。本文采用 CLARABEL、SCS、OSQP 三个求解器的回退策略以增强数值鲁棒性（详见 \S\ref{sec:line_search}）。
+
+% ======================================================================
+\section{线搜索与迭代求解}
+\label{sec:line_search}
+% ======================================================================
+
+\subsection{动机}
+
+SCA 中，凸子问题的解 $\mathbf{S}^*$ 是原问题在该迭代点处的近似最优解。由于凸近似仅在一阶精确（即仅在参考点附近与真实函数接近），直接将 $\mathbf{S}^*$ 作为新参考点可能导致目标函数值不降反升（overshoot），破坏算法的下降性，甚至引发振荡或发散。
+
+\textbf{线搜索（line search）}通过在参考点与子问题解之间沿下降方向搜索合适的步长，保证每一 SCA 迭代都使原问题的真实目标函数值单调下降。
+
+\subsection{步长候选集}
+
+定义下降方向：
+
+\begin{equation}
+\Delta\mathbf{S}=\mathbf{S}^*-\mathbf{S}^{(l)},\quad
+\Delta\bm{\delta}=\bm{\delta}^*-\bm{\delta}^{(l)}
+\label{eq:descent_direction}
+\end{equation}
+
+对候选步长 $\alpha\in\{1.0,\,0.8,\,0.6,\,0.4,\,0.2,\,0.1,\,0.05\}$，构造试探点：
+
+\begin{align}
+\mathbf{S}_{\alpha}&=(1-\alpha)\mathbf{S}^{(l)}+\alpha\mathbf{S}^*
+\label{eq:line_search_S}\\
+\bm{\delta}_{\alpha}&=(1-\alpha)\bm{\delta}^{(l)}+\alpha\bm{\delta}^*
+\label{eq:line_search_delta}
+\end{align}
+
+步长候选集从大到小依次尝试：优先接受大步长以加速收敛；当大步长导致目标上升或数值异常时，自动退回至更保守的步长。该候选集对应 \texttt{SolverCfg.line\_search\_candidates} 的默认值（\texttt{p2\_solver.py} 第32行）。
+
+\subsection{接受准则}
+
+对每个试探步长 $\alpha$，计算真实目标函数值（非凸近似值）：
+
+\begin{equation}
+J(\mathbf{S}_{\alpha})=\eta\cdot\mathrm{CRB}_{\mathrm{xyz}}\bigl(\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m(\mathbf{S}_{\alpha}),\;\hat{\mathbf{t}}\bigr)
+-(1-\eta)\cdot\bar{R}_{\mathrm{cum}}^{(m)}(\mathbf{S}_{\alpha})\big/1000
+\label{eq:true_objective}
+\end{equation}
+
+接受准则为：$J(\mathbf{S}_{\alpha})$ 有限且小于当前参考点的目标值。所有通过检验的步长中，选择使 $J$ 最小的 $\alpha^*$。若无任何步长通过检验（包括 $\alpha=0.05$），则\textbf{强制接受}子问题解 $\mathbf{S}^*$（$\alpha=1.0$），以防止算法停滞。
+
+该线搜索逻辑对应 \texttt{solve\_p2m\_sca} 第234--270行的 \texttt{line\_search\_candidates} 循环与接受判定。
+
+\subsection{收敛判定与终止}
+
+SCA 主循环在满足以下任一条件时终止：
+
+\begin{enumerate}
+    \item \textbf{目标收敛}：相邻两次迭代的目标函数值变化量 $|J^{(l)}-J^{(l-1)}|\leq\tau_{\mathrm{obj}}=10^{-3}$；
+    \item \textbf{最大迭代}：达到预设最大迭代次数 $I_{\max}=1000$（实际实验中通常设 $\mathrm{max\_sca\_iter}=20$ 即可收敛）。
+\end{enumerate}
+
+\subsection{求解器回退机制}
+
+由于 cvxpy 将 SOCP 传递给后端求解器，不同求解器对不同结构的优化问题表现各异。本工作采用\textbf{多求解器回退（fallback）}策略，按优先级依次尝试 CLARABEL、SCS、OSQP（对应 \texttt{\_SOLVER\_CANDIDATES}，第130行）。若某求解器返回 \texttt{infeasible}、\texttt{unbounded} 或求解异常，自动尝试下一个，确保在各种问题实例下的求解鲁棒性。该策略通过 \texttt{\_solve\_with\_fallback} 函数（第132--151行）实现，并统计各求解器的使用频次。
+
+\subsection{初始轨迹生成}
+
+SCA 需要高质量的初始参考轨迹 $\mathbf{S}^{(0)}$ 以保证收敛至有意义的局部最优解。
+
+\subsubsection{初始目标位置估计——粗扫描（Stage 0）}
+
+在多阶段轨迹优化启动前，UAV 对目标位置尚无任何先验信息。为获得 P2$(m)$ 所需的初始目标估计 $\hat{\mathbf{t}}^{(0)}$，本文在起点附近执行一次\textbf{粗扫描（coarse scan）}，作为 Stage 0。具体流程如下：
+
+\begin{enumerate}
+    \item \textbf{悬停格点生成}：在起点 $(x_B,y_B)$ 的二维邻域内（默认 $40\;\mathrm{m}\times 40\;\mathrm{m}$）布置 $2\times 2=4$ 个悬停格点，飞行高度均为标称高度 $H$（对应 \texttt{build\_coarse\_scan\_hover\_points} 第259--283行）；
+    \item \textbf{测距}：UAV 遍历各悬停点，在每个点悬停 $T_h$ 秒并向目标发射 ISAC 信号，接收回波以获取距离估计 $\widehat{d}_s(k)$（共 $K_0=4$ 个量测）；
+    \item \textbf{MLE 初始估计}：基于 4 个距离量测，以两级网格搜索 MLE（粗网格步长 $80\;\mathrm{m}$，精网格步长 $20\;\mathrm{m}$）估计目标的二维坐标 $(\hat{x}_t,\hat{y}_t)$；由于 4 个等高度量测无法分辨目标高度，$z$ 坐标固定为 $z_{\min}$ 与 $z_{\max}$ 的中值（对应 \texttt{run\_initial\_coarse\_scan} 第305--336行）；
+    \item \textbf{能耗扣减}：扫描消耗的飞行与悬停能量 $E_{\mathrm{scan}}$ 从总能量 $E_{\mathrm{tot}}$ 中扣减，剩余能量 $E_1=E_{\mathrm{tot}}-E_{\mathrm{scan}}$ 作为多阶段优化的能量预算。
+\end{enumerate}
+
+粗扫描完成后，$\hat{\mathbf{t}}^{(0)}$ 作为 P2$(1)$ 的目标位置输入（即 \texttt{StageData.target\_hat\_xyz}），粗扫描悬停点 $\mathcal{H}_0$ 作为初始历史悬停点 $\mathcal{H}_{\mathrm{hist}}^{(1)}$。
+
+\subsubsection{单阶段初始路径构造}
+
+获得初始目标估计后，对于每一阶段 $m$，本文采用基于几何引导的直线初始路径（对应 \texttt{\_init\_path} 函数第40--62行，源自文献\cite{Jing2022} 的式(60)）：
+
+\begin{enumerate}
+    \item 计算通信用户 $\mathbf{u}=(x_u,y_u)$ 与当前目标估计 $\hat{\mathbf{t}}^{(m-1)}$ 的二维中点 $\mathbf{m}_{xy}=\frac{1}{2}\bigl(\mathbf{u}+(\hat{x}_t,\hat{y}_t)\bigr)$；
+    \item 从阶段起点 $\mathbf{s}_{\mathrm{start}}^{(m)}$ 向 $\mathbf{m}_{xy}$ 作单位方向向量 $\mathbf{u}_{\mathrm{dir}}$；
+    \item 沿该方向以步长 $V_{\mathrm{str}}$（默认 $20\;\mathrm{m}$）依次生成 $N_m$ 个航点：$\mathbf{s}_n^{(0)}=\mathbf{s}_{\mathrm{start}}^{(m)}+n\cdot V_{\mathrm{str}}\cdot\mathbf{u}_{\mathrm{dir}}$；
+    \item $z$ 坐标初始化为标称高度 $H$，$(x,y)$ 裁剪至空域边界 $[0,L_x]\times[0,L_y]$。
+\end{enumerate}
+
+该初始路径的合理性在于：中点方向兼顾了靠近用户（改善通信）和靠近目标（改善感知）的双重需求，为 SCA 提供了良好的迭代起点。
+
+% ======================================================================
+\section{多阶段扩展与完整算法}
+\label{sec:multistage}
+% ======================================================================
+
+多阶段轨迹优化遵循"感知引导轨迹、轨迹增强感知"的 ISAC 闭环范式。本节从顶层流程、内部自适应机制、累积口径和目标估计方法四个层面阐述完整算法，并以算法伪代码给出统一描述。
+
+\subsection{多阶段主流程}
+
+以 $M$ 表示总阶段数（未知，由能量耗尽条件动态确定），第 $m$ 阶段（$m=1,\ldots,M$）的优化与执行流程如下。
+
+\medskip
+\noindent\textbf{步骤 1：粗扫描获取初始估计（Stage 0）}
+
+在多阶段优化启动前，UAV 对目标位置无任何先验信息，需执行一次初始粗扫描：
+\begin{enumerate}
+    \item[1-1)] 在起点 $\mathbf{s}_0=(x_B,y_B,H)$ 的二维邻域内（默认 $40\;\mathrm{m}\times 40\;\mathrm{m}$）布置 $2\times 2$ 个悬停格点，各点悬停 $T_h$ 秒发射 ISAC 信号并接收回波，获得 $K_0=4$ 个距离量测 $\{\widehat{d}_s(k)\}_{k=1}^{K_0}$；
+    \item[1-2)] 以两级网格搜索 MLE（粗网格步长 $80\;\mathrm{m}$，精网格步长 $20\;\mathrm{m}$）估计目标的二维坐标 $(\hat{x}_t^{(0)},\hat{y}_t^{(0)})$；由于等高度量测无法分辨 $z$，将其固定为 $z$ 取值范围的中值 $\hat{z}_t^{(0)}=\frac{1}{2}(z_{\min}+z_{\max})$；
+    \item[1-3)] 计算粗扫描能耗 $E_{\mathrm{scan}}$（飞行与悬停之和，式\eqref{eq:energy_breakdown}），扣减后得第 1 阶段可用能量 $E_1=E_{\mathrm{tot}}-E_{\mathrm{scan}}$；
+    \item[1-4)] 初始化历史悬停集 $\mathcal{H}_{\mathrm{hist}}=\mathcal{H}_0$（粗扫描格点），累计航点数 $N_{\mathrm{prev}}=0$，累计速率和 $R_{\mathrm{prev}}=0$。
+\end{enumerate}
+
+\noindent\textbf{步骤 2：多阶段主循环}
+
+对 $m=1,2,\ldots$，当剩余能量 $E_m>0$ 时，循环执行：
+
+\begin{enumerate}
+    \item[2-1)] \textbf{自适应确定阶段航点数} $N_m$：从预设的最大航点数 $N_{\mathrm{stg}}$ 开始，以步长 $\mu$ 递减至 $3\mu$，对每个候选 $N_m$ 尝试求解 P2$(m)$，选择第一个满足可行性条件（见 \S\ref{sec:adaptive_nm}）的 $N_m$。若无任何 $N_m$ 可行，则主循环终止；
+    \item[2-2)] \textbf{构建阶段数据}：计算 $K_m=\lfloor N_m/\mu\rfloor$，构造 \texttt{StageData} 实例（含当前目标估计 $\hat{\mathbf{t}}^{(m-1)}$、阶段起点 $\mathbf{s}_{\mathrm{start}}^{(m)}$、历史悬停点 $\mathcal{H}_{\mathrm{hist}}$、剩余能量 $E_m$、累计速率 $(N_{\mathrm{prev}},R_{\mathrm{prev}})$）；
+    \item[2-3)] \textbf{SCA 内循环求解} P2$(m)$（详见 \S\ref{sec:line_search}）：
+        \begin{itemize}
+            \item[2-3-1)] 以几何引导直线构造初始轨迹 $\mathbf{S}^{(0)}$（\S\ref{sec:line_search}），初始化参考速度 $\mathbf{V}^{(0)}$ 和辅助变量 $\bm{\delta}^{(0)}$；
+            \item[2-3-2)] 第 $l$ 次 SCA 迭代：线件化目标函数（速率与 CRB 的一阶泰勒展开）、凸化能量约束（约束\eqref{eq:constraint_51a}\eqref{eq:constraint_51b}），构造并求解 SOCP 凸子问题（式\eqref{eq:convex_obj}--\eqref{eq:convex_energy}），得候选解 $(\mathbf{S}^*,\mathbf{V}^*,\bm{\delta}^*)$；
+            \item[2-3-3)] 线搜索：在步长候选集 $\{1.0,0.8,0.6,0.4,0.2,0.1,0.05\}$ 中选取使原问题真实目标函数（式\eqref{eq:obj_p2m}）下降最多的步长 $\alpha^*$，更新 $\mathbf{S}^{(l)}\leftarrow(1-\alpha^*)\mathbf{S}^{(l-1)}+\alpha^*\mathbf{S}^*$；
+            \item[2-3-4)] 检查收敛：若 $|J(\mathbf{S}^{(l)})-J(\mathbf{S}^{(l-1)})|\leq\tau_{\mathrm{obj}}$ 或达到最大迭代次数 $I_{\max}$，终止 SCA 内循环；否则 $l\leftarrow l+1$，返回 2-3-2)；
+        \end{itemize}
+    \item[2-4)] \textbf{执行阶段轨迹}：UAV 沿 $\mathbf{S}_m^*$ 飞行，在悬停点 $\mathcal{H}_m=\{\mathbf{s}_m^*[k\mu]\}_{k=1}^{K_m}$ 处发射 ISAC 信号并接收回波，获得新的距离量测向量 $\widehat{\mathbf{d}}_s^{(m)}\in\mathbb{R}^{K_m}$；
+    \item[2-5)] \textbf{更新目标估计} $\hat{\mathbf{t}}^{(m)}$（详见 \S\ref{sec:target_estimator}）：
+        \begin{itemize}
+            \item 若使用 MLE（离线精估计模式），以全部累积量测 $\bigcup_{j=1}^{m}\widehat{\mathbf{d}}_s^{(j)}$ 为输入，执行两级网格搜索更新估计；
+            \item 若使用 EKF（在线递推模式），以上一阶段后验 $\hat{\mathbf{t}}^{(m-1)}$ 作为先验，依次注入 $K_m$ 个新量测执行更新；
+        \end{itemize}
+    \item[2-6)] \textbf{状态递推}：
+        \begin{align}
+            E_{m+1}&\leftarrow E_m-E^{(m)} \label{eq:update_E}\\
+            N_{\mathrm{prev}}&\leftarrow N_{\mathrm{prev}}+N_m \label{eq:update_N}\\
+            R_{\mathrm{prev}}&\leftarrow R_{\mathrm{prev}}+\sum_{n=1}^{N_m}R\bigl(\mathbf{s}_m^*[n]\bigr) \label{eq:update_R}\\
+            \mathcal{H}_{\mathrm{hist}}&\leftarrow\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m \label{eq:update_H}\\
+            \mathbf{s}_{\mathrm{start}}^{(m+1)}&\leftarrow\mathbf{s}_m^*[N_m],\quad m\leftarrow m+1 \label{eq:update_start}
+        \end{align}
+\end{enumerate}
+
+\noindent\textbf{步骤 3：终止输出}
+
+当 $E_m$ 不足以支撑最低航线规模（$N_m<3\mu$ 时无可行轨迹）或 SCA 始终无法收敛至可行解时，主循环终止。输出全部阶段轨迹 $\{\mathbf{S}_1^*,\ldots,\mathbf{S}_{M}^*\}$、最终目标估计 $\hat{\mathbf{t}}^{(M)}$、以及各阶段通信与感知性能指标。
+
+\begin{enumerate}
+    \item \textbf{初始粗扫描（Stage 0）}：在起点附近 $2\times 2$ 格点执行短距悬停测距，以两级网格搜索 MLE 获得目标初始估计 $\hat{\mathbf{t}}^{(0)}$，扣减扫描能耗 $E_{\mathrm{scan}}$；
+    \item \textbf{主循环（$m=1,2,\ldots$）}，当剩余能量 $E_m>0$ 时：
+    \begin{enumerate}
+        \item 基于当前目标估计 $\hat{\mathbf{t}}^{(m-1)}$、历史悬停点 $\mathcal{H}_{\mathrm{hist}}$、剩余能量 $E_m$ 和累计速率值 $(N_{\mathrm{prev}},R_{\mathrm{prev}})$，构建 \texttt{StageData} 实例；
+        \item 调用 \texttt{solve\_p2m\_sca} 求解 P2$(m)$（含 SCA 内循环和线搜索），得到阶段最优轨迹 $\mathbf{S}_m^*$；
+        \item 在 $\mathbf{S}_m^*$ 的悬停点 $\mathcal{H}_m$ 处采集新的测距量测；
+        \item 运行目标定位器（EKF 递推更新或 MLE 批量估计）更新 $\hat{\mathbf{t}}^{(m)}$；
+        \item 更新 $E_{m+1}=E_m-E^{(m)}$、$N_{\mathrm{prev}}\leftarrow N_{\mathrm{prev}}+N_m$、$R_{\mathrm{prev}}\leftarrow R_{\mathrm{prev}}+\sum_n R^{(m)}[n]$、$\mathcal{H}_{\mathrm{hist}}\leftarrow\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m$。
+    \end{enumerate}
+    \item \textbf{终止条件}：$E_m$ 不足以支撑最低航点数（$N_m<3\mu$）时终止。
+\end{enumerate}
+
+\subsection{阶段航点数的自适应选择}
+\label{sec:adaptive_nm}
+
+在步骤 2-1) 中，算法通过以下自适应机制确定每阶段的航点数 $N_m$：
+
+\begin{enumerate}
+    \item 令候选值 $N_{\mathrm{try}}$ 从 $N_{\mathrm{stg}}$ 递减至 $3\mu$（步长为 $\mu$），对每个 $N_{\mathrm{try}}$ 计算 $K_{\mathrm{try}}=\lfloor N_{\mathrm{try}}/\mu\rfloor$，执行步骤 2-2) 至 2-3)；
+    \item SCA 收敛后检查：① 求解器返回 \texttt{optimal} 或 \texttt{optimal\_inaccurate} 状态；② $E_{\mathrm{actual}}\leq E_m+\epsilon_E$（$\epsilon_E=10^{-6}$ 为数值容差）；
+    \item 若满足，则接受当前 $N_m=N_{\mathrm{try}}$，跳出候选循环；否则尝试下一个较小的 $N_{\mathrm{try}}$。
+\end{enumerate}
+
+该机制确保在剩余能量充裕的前期阶段，以最大航点数充分优化轨迹；在能量紧张的后期阶段，自动缩减规模以避免不可行。
+
+\subsection{累计通信速率口径}
+
+步骤 2-2) 中的累计速率递推（式\eqref{eq:update_N}\eqref{eq:update_R}）与 P2$(m)$ 目标函数中 $\bar{R}_{\mathrm{cum}}^{(m)}$（式\eqref{eq:cum_rate_p2m}）的定义一致：将历史所有阶段的通信速率按航点数加权平均，使新阶段速率与历史速率在同一量纲下公平比较。注意到粗扫描（Stage 0）阶段不涉及通信（仅作测距），因此 $N_{\mathrm{prev}}^{(1)}=0$，$R_{\mathrm{prev}}^{(1)}=0$。经历 $M$ 个主阶段后，最终累计速率为 $\bar{R}_{\mathrm{cum}}=R_{\mathrm{prev}}^{(M+1)}\big/N_{\mathrm{prev}}^{(M+1)}$。
+
+\subsection{目标估计方法}
+\label{sec:target_estimator}
+
+步骤 2-5) 支持以下两种目标估计策略。
+
+\subsubsection{两级网格搜索 MLE}
+
+基于负对数似然函数\cite{Kay1993}：
+
+\begin{equation}
+\mathcal{L}\bigl(\mathbf{t};\widehat{\mathbf{D}}\bigr)=
+-\log p\bigl(\widehat{\mathbf{D}};\mathbf{t}\bigr)
+\end{equation}
+
+在二维搜索域 $[0,L_x]\times[0,L_y]$ 上（$z$ 维度以粗/细网格单独处理），先以大步长（$200\;\mathrm{m}$）作粗搜索定位全局最优邻域，再以细步长（$1\;\mathrm{m}$）在邻域内精化。MLE 在每个阶段结束时，利用全部历史测距数据重新估计，保证全局最优（在网格意义上）。为防止全局最优落在区域角落导致的虚假收敛，MLE 还包含参考点守卫逻辑：当粗搜索最优解触及区域边界时，自动在邻域内启动额外的局部精搜。
+
+\subsubsection{EKF 递推估计}
+
+采用 3-D 恒定位置模型的序贯 EKF\cite{Rangzenegger2020}。状态为 $\mathbf{t}=(x_t,y_t,z_t)^{\mathsf{T}}$，状态转移矩阵 $\mathbf{F}=\mathbf{I}_3$。对于第 $k$ 个距离量测 $z_k$（在 UAV 位置 $\mathbf{u}_k$ 处获取），EKF 的预测与更新为：
+
+\begin{align}
+&\text{预测：}&\hat{\mathbf{t}}_{k|k-1}&=\hat{\mathbf{t}}_{k-1|k-1},\quad
+\mathbf{P}_{k|k-1}=\mathbf{P}_{k-1|k-1}+\mathbf{Q} \label{eq:ekf_predict}\\
+&\text{更新：}&\mathbf{K}_k&=\mathbf{P}_{k|k-1}\mathbf{H}_k^{\mathsf{T}}
+\bigl(\mathbf{H}_k\mathbf{P}_{k|k-1}\mathbf{H}_k^{\mathsf{T}}+R_k\bigr)^{-1} \nonumber\\
+&&\hat{\mathbf{t}}_{k|k}&=\hat{\mathbf{t}}_{k|k-1}+
+\mathbf{K}_k\bigl(z_k-h(\hat{\mathbf{t}}_{k|k-1})\bigr) \label{eq:ekf_update}\\
+&&\mathbf{P}_{k|k}&=(\mathbf{I}-\mathbf{K}_k\mathbf{H}_k)
+\mathbf{P}_{k|k-1}(\mathbf{I}-\mathbf{K}_k\mathbf{H}_k)^{\mathsf{T}}+
+\mathbf{K}_k R_k\mathbf{K}_k^{\mathsf{T}} \nonumber
+\end{align}
+
+其中 $\mathbf{H}_k$ 为量测函数 $h(\mathbf{t})=\|\mathbf{u}_k-\mathbf{t}\|$ 的 Jacobian，$R_k$ 为异方差量测方差（与仿真模型一致），协方差更新采用 Joseph 形式以保证对称性与数值稳定性。EKF 的优势在于计算量恒定（每量测 $\mathcal{O}(1)$，与累积量测总数无关），适合在线定位场景。在多阶段框架中，每次 EKF 的初值以上一阶段后验 $\hat{\mathbf{t}}^{(m-1)}$ 和对应协方差 $\mathbf{P}^{(m-1)}$ 初始化。
+
+\subsection{完整算法伪代码}
+
+\begin{algorithm}[htbp]
+\caption{多阶段 ISAC 轨迹优化与目标定位}
+\label{alg:multistage}
+\begin{algorithmic}[1]
+\REQUIRE 系统配置 $\mathcal{C}$（空域、速度、飞行参数）；通信/感知/能量参数 $(\alpha_0,\beta_0,P_w,\sigma_0^2,B,P_0,P_I,\ldots)$；权衡因子 $\eta\in[0,1]$；总能量 $E_{\mathrm{tot}}$；粗扫描格点数 $n_x,n_y$；阶段最大航点数 $N_{\mathrm{stg}}$
+\ENSURE 阶段轨迹 $\{\mathbf{S}_m^*\}_{m=1}^{M}$；最终目标估计 $\hat{\mathbf{t}}^{(M)}$；各阶段性能指标
+
+\medskip
+\STATE \textbf{// ---- Stage 0：粗扫描获取初始估计 ----}
+\STATE $\mathcal{H}_0,\widehat{\mathbf{D}}_0,E_{\mathrm{scan}}\gets\text{RunCoarseScan}(n_x,n_y,\mathbf{s}_0)$
+\STATE $\hat{\mathbf{t}}^{(0)}\gets\text{TwoStageMLE}(\widehat{\mathbf{D}}_0,\mathcal{H}_0)$
+\STATE $\mathcal{H}_{\mathrm{hist}}\gets\mathcal{H}_0$,\; $N_{\mathrm{prev}}\gets 0$,\; $R_{\mathrm{prev}}\gets 0$,\; $E_1\gets E_{\mathrm{tot}}-E_{\mathrm{scan}}$
+\STATE $m\gets 1$
+
+\medskip
+\STATE \textbf{// ---- 多阶段主循环 ----}
+\WHILE{$E_m>0$}
+    \STATE \textbf{// ---- 自适应确定 $N_m$ ----}
+    \FOR{$N_m=N_{\mathrm{stg}}, N_{\mathrm{stg}}-\mu,\ldots,3\mu$}
+        \STATE $\mathbf{s}_{\mathrm{start}}\gets\mathbf{s}_0$（若 $m=1$）；否则 $\mathbf{s}_{\mathrm{start}}\gets\mathbf{S}_{m-1}^*[N_{m-1}]$
+        \STATE $\mathcal{D}\gets\textsc{StageData}(m,N_m,\lfloor N_m/\mu\rfloor,E_m,\eta,\mathbf{u},\hat{\mathbf{t}}^{(m-1)},\mathbf{s}_{\mathrm{start}},\mathcal{H}_{\mathrm{hist}},N_{\mathrm{prev}},R_{\mathrm{prev}})$
+
+        \STATE \textbf{// ---- SCA 内循环求解 P2$(m)$ ----}
+        \STATE $\mathbf{S}^{(0)}\gets\text{InitPath}(\mathcal{D})$;\;
+            $\mathbf{V}^{(0)}\gets\text{Diff}(\mathbf{S}^{(0)},\mathbf{s}_{\mathrm{start}})/T_f$;\;
+            $\bm{\delta}^{(0)}\gets\max(\|\mathbf{V}^{(0)}\|/v_0,\varepsilon_{\delta})$
+        \FOR{$l=1,2,\ldots,\mathrm{max\_iter}$}
+            \STATE $(\mathbf{S}^*,\mathbf{V}^*,\bm{\delta}^*,\bm{\xi}^*)\gets\text{SolveSOCP}(\mathbf{S}^{(l-1)},\mathbf{V}^{(l-1)},\bm{\delta}^{(l-1)})$
+            \STATE $\alpha^*\gets\text{LineSearch}(\mathbf{S}^*,\mathbf{S}^{(l-1)},\{1.0,0.8,\ldots,0.05\})$
+            \STATE $\mathbf{S}^{(l)}\gets(1-\alpha^*)\mathbf{S}^{(l-1)}+\alpha^*\mathbf{S}^*$
+            \IF{$|J^{(l)}-J^{(l-1)}|\leq\tau_{\mathrm{obj}}$} \textbf{break} \ENDIF
+        \ENDFOR
+
+        \IF{SCA 收敛 \textbf{and} $E_{\mathrm{actual}}\leq E_m+\epsilon_E$}
+            \STATE $\mathbf{S}_m^*\gets\mathbf{S}^{(l)}$ \textbf{break} \COMMENT{接受该 $N_m$}
+        \ENDIF
+    \ENDFOR
+
+    \IF{无可行 $N_m$}
+        \STATE \textbf{break} \COMMENT{能量不足以维持下一阶段}
+    \ENDIF
+
+    \STATE \textbf{// ---- 执行轨迹并更新估计 ----}
+    \STATE $\mathcal{H}_m\gets\text{ExtractHoverPoints}(\mathbf{S}_m^*,\mu)$
+    \STATE $\widehat{\mathbf{D}}_m\gets\text{CollectMeasurements}(\mathcal{H}_m)$
+    \STATE $\hat{\mathbf{t}}^{(m)}\gets\text{UpdateEstimate}(\hat{\mathbf{t}}^{(m-1)},\widehat{\mathbf{D}}_m,\mathcal{H}_m)$ \COMMENT{MLE 或 EKF}
+
+    \STATE \textbf{// ---- 状态递推 ----}
+    \STATE $E_{m+1}\gets E_m-E^{(m)}$;\;
+        $N_{\mathrm{prev}}\gets N_{\mathrm{prev}}+N_m$;\;
+        $R_{\mathrm{prev}}\gets R_{\mathrm{prev}}+\sum_{n}R(\mathbf{s}_m^*[n])$;\;
+        $\mathcal{H}_{\mathrm{hist}}\gets\mathcal{H}_{\mathrm{hist}}\cup\mathcal{H}_m$
+    \STATE $m\gets m+1$
+\ENDWHILE
+
+\medskip
+\RETURN $\{\mathbf{S}_1^*,\ldots,\mathbf{S}_{m-1}^*\}$,\; $\hat{\mathbf{t}}^{(m-1)}$
+\end{algorithmic}
+\end{algorithm}
+
+% ======================================================================
+\section{数值实现细节}
+\label{sec:implementation}
+% ======================================================================
+
+\subsection{软件架构}
+
+本章所述的优化算法在以下 Python 模块中实现（以项目根目录为相对路径）：
+
+\begin{itemize}
+    \item \texttt{system\_model.py}：系统模型层——轨迹、通信、感知 CRB、能耗的基础数学函数；
+    \item \texttt{problem.py}：问题定义层——推进功率计算、P1 数值评估、阶段能耗计算；
+    \item \texttt{p2\_solver.py}：SCA 求解器核心——\texttt{solve\_p2m\_sca} 函数、CRB/速率线性化、能量约束凸化、线搜索与求解器回退；
+    \item \texttt{simulation\_pipeline.py}：仿真流程层——多阶段主循环、MLE 网格搜索、粗扫描、EKF 接口；
+    \item \texttt{ekf\_range\_localization.py}：3-D 静态目标距离 EKF；
+    \item \texttt{config\_factory.py}：配置工厂——统一创建系统配置、能量配置和求解器配置。
+\end{itemize}
+
+\subsection{关键超参数}
+
+表\ref{tab:sca_params} 汇总了 SCA 求解器的关键超参数及其默认值。
+
+\begin{table}[htbp]
+\centering
+\caption{SCA 求解器超参数}
+\label{tab:sca_params}
+\begin{tabular}{ccl}
+\hline
+\textbf{参数} & \textbf{默认值} & \textbf{含义} \\
+\hline
+\texttt{max\_sca\_iter} & $1000$（实验用 $20$） & SCA 外循环最大迭代次数 \\
+\texttt{tol\_obj} & $10^{-3}$ & 目标函数收敛容差 \\
+\texttt{step\_size} & $0.6$ & （保留，线搜索未直接使用） \\
+\texttt{delta\_eps} & $10^{-3}$ & $\delta_n$ 下界 \\
+\texttt{min\_step\_size} & $10^{-3}$ & （保留，线搜索未直接使用） \\
+\texttt{line\_search\_candidates} & $\{1.0,0.8,0.6,0.4,0.2,0.1,0.05\}$ & 线搜索步长候选集 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{数值缩放策略}
+
+目标函数中通信项除以 $1000$（\texttt{p2\_solver.py} 第220行）是关键的数值缩放策略。其必要性源于 CRB（量级 $10^0\sim 10^3$）与速率（量级 $10^5\sim 10^7$）之间的巨大跨度：若不缩放，优化器会对通信项过度敏感，导致感知项在目标函数中被淹没；若缩放因子过大，则感知项主导。因子 $1000$ 经实验调优，在典型参数设置下使两项处于可比量级。
+
+% ======================================================================
+\section{收敛性讨论}
+\label{sec:convergence}
+% ======================================================================
+
+\subsection{SCA 的收敛性质}
+
+在满足以下条件下，SCA 框架保证迭代序列的目标函数值单调不增并收敛至原问题的 KKT（Karush-Kuhn-Tucker）点\cite{Zeng2016}：
+
+\begin{enumerate}
+    \item \textbf{凸近似的一致性}：在每步参考点处，凸近似函数与原函数具有相同的一阶信息（函数值和梯度一致）；
+    \item \textbf{紧性}：约束的凸近似是原可行域的保守内逼近（即凸近似可行域 $\subseteq$ 原可行域）；
+    \item \textbf{线搜索的充分下降}：每次迭代真实目标函数值单调下降。
+\end{enumerate}
+
+本章所述的 SCA 设计满足上述条件：
+
+\begin{itemize}
+    \item 速率线性化和 CRB 线性化为一阶泰勒展开，在参考点处与原函数值和梯度一致（一致性成立）；
+    \item 能量约束 (51a)(51b) 的右侧为原凸函数的一阶展开下界，左侧为凸函数（$\delta^{-2}$），因此凸近似可行域不超出原可行域（紧性成立）；
+    \item 线搜索在候选步长中选取使真实目标下降的步长，保证单调性。
+\end{itemize}
+
+\subsection{局部最优性}
+
+需指出，SCA 法保证收敛至\textbf{驻点}（KKT 点），而\textbf{非}全局最优解。P2$(m)$ 的非凸性意味着存在多个局部最优解，最终解的质量依赖于初始轨迹 $\mathbf{S}^{(0)}$ 的选择。本文采用基于几何引导的直线初始路径（\S\ref{sec:line_search} 末段），在实践中被验证能引导 SCA 收敛至具有良好通信-感知权衡的局部最优解。
+
+% ======================================================================
+\section{本章小结}
+\label{sec:summary}
+% ======================================================================
+
+本章从以下五个层面完整呈现了非凸 ISAC 轨迹优化问题的凸化、求解与多阶段闭环算法：
+
+\begin{enumerate}
+    \item \textbf{P2$(m)$ 建模}（\S\ref{sec:p2m}）：将全局非凸问题 P1 分解为单阶段子问题 P2$(m)$，引入累计速率口径 $\bar{R}_{\mathrm{cum}}^{(m)}$ 确保阶段间速率衡量的递推一致性，CRB 依赖全部历史悬停点体现感知的累积特性；
+    \item \textbf{SCA 凸近似}（\S\ref{sec:sca}）：通信速率通过闭式梯度 $B/(\ln2)\cdot(-C/q^2)/(1+C/q)\cdot\nabla q$ 实现仿射线性化；CRB 通过中心差分 $[f(\mathbf{x}+\epsilon)-f(\mathbf{x}-\epsilon)]/(2\epsilon)$ 实现数值梯度线性化；诱导功率通过辅助变量 $(\delta_n,\xi_n)$ 和锥约束 (51a)(51b) 实现保守凸化；
+    \item \textbf{线搜索与迭代求解}（\S\ref{sec:line_search}）：步长候选集 $\{1.0,0.8,\ldots,0.05\}$ 配合真实目标函数评估，确保每次 SCA 迭代的充分下降；多求解器回退（CLARABEL/SCS/OSQP）保证数值鲁棒性；
+    \item \textbf{多阶段扩展}（\S\ref{sec:multistage}）：完整的"优化—执行—估计—再优化"闭环算法，支持 MLE 和 EKF 两种目标定位模式，自适应航点数选择；
+    \item \textbf{实现与收敛性}（\S\ref{sec:implementation}--\S\ref{sec:convergence}）：给出了算法实现的软件架构、超参数设置、数值缩放策略及 SCA 收敛性分析。
+\end{enumerate}
+
+本章的凸化方法论和算法设计为第四章的仿真实验提供了完整的技术支撑。各函数与代码模块的对应关系已分别在相关小节中标明。
+
+% ----------------------------------------------------------------------
+\begin{thebibliography}{10}
+
+\bibitem{Jing2022}
+X.~Jing, F.~Liu, C.~Masouros, Y.~Zeng.
+``ISAC from the Sky: UAV Trajectory Design for Joint Communication and Target Localization,''
+\textit{IEEE Trans. Wireless Commun.}, 2022.
+
+\bibitem{Zeng2016}
+Y.~Zeng, R.~Zhang.
+``Energy-Efficient UAV Communication with Trajectory Optimization,''
+\textit{IEEE Trans. Wireless Commun.}, vol.~15, no.~6, pp.~3747--3760, 2016.
+
+\bibitem{Rangzenegger2020}
+S.~Rangzenegger, R.~Prassler, H.~Bischof.
+``On the Cram\'{e}r-Rao Lower Bound for Time-of-Arrival Based Positioning,''
+\textit{IEEE Trans. Signal Process.}, 2020.
+
+\bibitem{Kay1993}
+S.~M.~Kay.
+\textit{Fundamentals of Statistical Signal Processing: Estimation Theory}.
+Prentice-Hall, 1993.
+
+\end{thebibliography}
